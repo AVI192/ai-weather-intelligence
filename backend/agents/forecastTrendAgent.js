@@ -282,22 +282,41 @@ export const analyzeForecastTrend = (
     };
   }
 
-  const temperatureValues = forecastData.map(
+  // Sort forecast observations chronologically where timestamps exist
+  const sortedForecast = [...forecastData].filter(item => item && typeof item === 'object').sort((a, b) => {
+    const timeA = typeof a?.dt === "number" ? a.dt : 0;
+    const timeB = typeof b?.dt === "number" ? b.dt : 0;
+    return timeA - timeB;
+  });
+
+  if (sortedForecast.length < 2) {
+    return {
+      agent: {
+        name: "Forecast Trend Agent",
+        version: "1.0",
+        status: "insufficient_data"
+      },
+      success: false,
+      message: "At least two valid forecast records are required."
+    };
+  }
+
+  const temperatureValues = sortedForecast.map(
     (item) => item?.main?.temp
   );
 
-  const humidityValues = forecastData.map(
+  const humidityValues = sortedForecast.map(
     (item) => item?.main?.humidity
   );
 
-  const rainValues = forecastData.map(
+  const rainValues = sortedForecast.map(
     (item) =>
       isValidNumber(item?.pop)
         ? item.pop * 100
         : null
   );
 
-  const windValues = forecastData.map(
+  const windValues = sortedForecast.map(
     (item) => {
       if (!isValidNumber(item?.wind?.speed)) {
         return null;
@@ -332,7 +351,7 @@ export const analyzeForecastTrend = (
 
   const conditionAnalysis =
     analyzeWeatherConditions(
-      forecastData
+      sortedForecast
     );
 
   const overallTrend =

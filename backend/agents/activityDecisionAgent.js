@@ -82,9 +82,18 @@ const generateRecommendation = ({
   classification,
   score,
   trendLevel,
-  negativeFactors,
-  interactions
+  negativeFactors: _negativeFactors,
+  interactions: _interactions
 }) => {
+  const isSwimming = activity.toLowerCase() === "swimming";
+
+  if (isSwimming) {
+    if (classification === "POOR" || classification === "UNSUITABLE" || score < 50) {
+      return `Outdoor swimming is not recommended under current atmospheric conditions. Note: Essential water safety factors (currents, tides, rip currents, water temperature, and water quality) are not monitored by atmospheric sensors and must be checked on-site.`;
+    }
+    return `Atmospheric weather conditions appear suitable for outdoor swimming. Important safety limitation: Water conditions (temperature, currents, tides, rip currents, and local lifeguard warnings) are NOT monitored by weather stations and must be verified locally before swimming.`;
+  }
+
   if (classification === "EXCELLENT") {
     return `${activity} appears highly suitable under the analyzed conditions.`;
   }
@@ -186,12 +195,31 @@ export const analyzeActivityDecision = ({
       trendResult?.overallTrend
     );
 
-  const finalScore = Math.round(
+  const isSwimming = activity.toLowerCase() === "swimming";
+
+  const rawCalculatedScore = Math.round(
     clamp(
       baseSuitability +
         trendAdjustment
     )
   );
+
+  // For swimming: water quality, rip currents, tides, and water temperature are unmonitored by atmospheric stations.
+  // We do not invent safety measurements or automatically produce an unverified EXCELLENT (>=80) score.
+  let finalScore = isSwimming && rawCalculatedScore > 75 ? 75 : rawCalculatedScore;
+
+  // Severe swimming hazard override: A known severe weather hazard (thunderstorm, storm, rain risk >= 70, or wind risk >= 70)
+  // cannot be overridden by favorable temperatures or positive trends. Clamped to <= 20 to guarantee an UNSUITABLE classification (< 25).
+  const hasSevereSwimmingHazard = isSwimming && (
+    riskScore >= 70 ||
+    riskResult?.risks?.rain?.score >= 70 ||
+    riskResult?.risks?.wind?.score >= 70 ||
+    (riskResult?.risks?.rain?.factors || []).some(f => /storm|thunderstorm|lightning/i.test(f))
+  );
+
+  if (hasSevereSwimmingHazard) {
+    finalScore = Math.min(finalScore, 20);
+  }
 
   const classification =
     getClassification(
@@ -231,6 +259,12 @@ export const analyzeActivityDecision = ({
       score: finalScore,
       classification
     },
+
+    safetyLimitations: isSwimming
+      ? [
+          "Atmospheric telemetry only: Water temperature, currents, tides, rip currents, surf conditions, and local water quality/lifeguard warnings are not monitored by weather sensors and must be verified on-site."
+        ]
+      : [],
 
     riskAssessment: {
       activityRiskScore: riskScore,

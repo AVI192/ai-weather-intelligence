@@ -5,10 +5,6 @@ import {
 } from '../services/openWeatherService.js'
 
 import {
-  analyzeWeatherData
-} from '../agents/dataIntelligenceAgent.js'
-
-import {
   reasonAboutWeather
 } from '../agents/weatherReasoningAgent.js'
 

@@ -74,7 +74,7 @@ const validateCurrentWeather = (current) => {
   checks.push(
     createCheck(
       'Visibility',
-      current?.visibility === null ||
+      current?.visibility == null ||
         (
           isNumber(current?.visibility) &&
           current.visibility >= 0 &&
@@ -105,7 +105,7 @@ const validateCurrentWeather = (current) => {
 const validateUV = (uvIndex) => {
   return createCheck(
     'UV Index',
-    uvIndex === null ||
+    uvIndex == null ||
       (
         isNumber(uvIndex) &&
         uvIndex >= 0 &&

@@ -205,12 +205,14 @@ const calculateRainRisk = ({
 }
 
 const calculateWindRisk = (windSpeed) => {
-  if (!isValidNumber(windSpeed)) {
+  if (!isValidNumber(windSpeed) || windSpeed < 0) {
     return {
       score: null,
       level: 'UNKNOWN',
       factors: [],
-      explanation: 'Wind data is unavailable.'
+      explanation: !isValidNumber(windSpeed)
+        ? 'Wind data is unavailable.'
+        : 'Invalid wind speed measurement (negative value).'
     }
   }
 
@@ -230,12 +232,14 @@ const calculateWindRisk = (windSpeed) => {
     score = 5
   }
 
+  const roundedSpeed = Math.round(windSpeed * 10) / 10
+
   return {
-    score,
-    level: getRiskLevel(score),
+    score: clamp(score),
+    level: getRiskLevel(clamp(score)),
     factors:
       score >= 60
-        ? [`strong wind (${windSpeed} km/h)`]
+        ? [`strong wind (${roundedSpeed} km/h)`]
         : [],
     explanation:
       score >= 60
@@ -286,7 +290,7 @@ const calculateVisibilityRisk = (
 }
 const detectInteractions = ({
   temperature,
-  feelsLike,
+  feelsLike: _feelsLike,
   humidity,
   windSpeed,
   uvIndex,
@@ -297,6 +301,7 @@ const detectInteractions = ({
   /*
    * Heat + humidity + low wind
    */
+  let hasHeatHumidityLowWind = false;
   if (
     isValidNumber(temperature) &&
     isValidNumber(humidity) &&
@@ -305,6 +310,7 @@ const detectInteractions = ({
     humidity >= 70 &&
     windSpeed < 10
   ) {
+    hasHeatHumidityLowWind = true;
     interactions.push({
       type: 'heat-humidity-low-wind',
       severity: 'HIGH',
@@ -333,9 +339,10 @@ const detectInteractions = ({
   }
 
   /*
-   * High heat + high humidity
+   * High heat + high humidity (avoid double-counting if heat-humidity-low-wind already triggered)
    */
   if (
+    !hasHeatHumidityLowWind &&
     isValidNumber(temperature) &&
     isValidNumber(humidity) &&
     temperature >= 32 &&
@@ -457,6 +464,15 @@ const ACTIVITY_PROFILES = {
     wind: 0.15,
     uv: 0.15,
     visibility: 0.05
+  },
+
+  swimming: {
+    temperature: 0.15,
+    humidity: 0.05,
+    rain: 0.40,
+    wind: 0.25,
+    uv: 0.10,
+    visibility: 0.05
   }
 }
 
@@ -497,8 +513,7 @@ const calculateActivityRisk = ({
     getActivityProfile(activity)
 
   const dimensionPairs = [
-    { score: heatRisk?.score, weight: profile.weights.temperature },
-    { score: heatRisk?.score, weight: profile.weights.humidity },
+    { score: heatRisk?.score, weight: (profile.weights.temperature + profile.weights.humidity) },
     { score: rainRisk?.score, weight: profile.weights.rain },
     { score: windRisk?.score, weight: profile.weights.wind },
     { score: uvRisk?.score, weight: profile.weights.uv },
@@ -549,13 +564,22 @@ const calculateActivityRisk = ({
   const normalizedWeightedScore =
     weightedScoreSum / totalValidWeight
 
-  const finalScore =
+  let finalScore =
     clamp(
       Math.round(
         normalizedWeightedScore +
         interactionImpact
       )
     )
+
+  // Open water swimming thunderstorm and severe weather hazard safety check
+  if (profile.name === 'swimming') {
+    const isThunderstorm = (rainRisk?.factors || []).some(f => /storm|thunderstorm/i.test(f)) ||
+      /thunderstorm|storm|lightning/i.test(rainRisk?.explanation || '')
+    if (isThunderstorm) {
+      finalScore = Math.max(finalScore, 90)
+    }
+  }
 
   const level =
     getRiskLevel(finalScore)

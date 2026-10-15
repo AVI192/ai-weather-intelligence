@@ -86,6 +86,8 @@ Traditional weather apps only display isolated statistics—temperatures, percen
    - Performs thermal comfort modeling (`Comfortable`, `Cool`, `Uncomfortable`, `Very Uncomfortable`) and explains physiological sensations.
 7. **City Intelligence Agent (`cityIntelligenceAgent.js`)**:
    - Ranks multiple destinations side-by-side for travel and event planning, spotlighting winner margins.
+8. **Live Groq LLM Intelligence Agent (`groqService.js`)**:
+   - Synthesizes composite meteorological telemetry into actionable natural-language executive verdicts, optimal time windows, clothing & gear recommendations, and powers the interactive multi-turn Live AI Copilot.
 
 ---
 
@@ -99,8 +101,9 @@ Traditional weather apps only display isolated statistics—temperatures, percen
 - **Backend**:
   - Node.js (ES Modules)
   - Express 5
+  - Groq SDK (`groq-sdk` with LLaMA 3.3 70B Versatile inference)
   - OpenWeatherMap API (Current weather, 5-day / 3-hour forecasts, Geocoding)
-  - Multi-Agent Orchestration Engine
+  - Multi-Agent Orchestration Engine (Data, Risk, Trend, Activity, City, Reasoning, Groq LLM)
 
 ---
 
@@ -109,6 +112,7 @@ Traditional weather apps only display isolated statistics—temperatures, percen
 ### 1. Prerequisites
 - Node.js `20.19+` or `22.12+`
 - An [OpenWeatherMap API key](https://openweathermap.org/api)
+- *(Optional for Live Groq AI)* A [free Groq API key](https://console.groq.com/keys)
 
 ### 2. Configure Environment Variables
 
@@ -118,6 +122,8 @@ PORT=5000
 FRONTEND_URL=http://localhost:5173
 NODE_ENV=development
 OPENWEATHER_API_KEY=your_openweather_api_key_here
+GROQ_API_KEY=your_groq_api_key_here
+GROQ_MODEL=llama-3.3-70b-versatile
 ```
 
 **Frontend (`.env`):**
@@ -150,6 +156,9 @@ Open the printed Vite URL in your browser (typically `http://localhost:5173`).
 | `GET` | `/api/orchestrator/route?query=...&lat=...&lon=...` | Generates the orchestration execution plan. |
 | `GET` | `/api/orchestrator/execute?query=...&lat=...&lon=...` | Executes multi-agent analysis for a given query and coordinates. |
 | `POST` | `/api/orchestrator/execute` | Executes analysis with a JSON payload (`query`, `lat`, `lon`, `activity`). |
+| `GET` | `/api/llm/status` | Checks Groq LLM configuration status and active model. |
+| `POST` | `/api/llm/chat` | Multi-turn conversational chat with Groq Live Weather AI. |
+| `POST` | `/api/llm/insight` | Standalone Groq LLM evaluation for custom weather payloads. |
 | `GET` | `/api/weather/current?city=...` | Fetches normalized current weather conditions. |
 | `GET` | `/api/weather/forecast?lat=...&lon=...` | Fetches 5-day / 3-hour forecast telemetry. |
 

@@ -36,15 +36,15 @@ const Weather = () => {
       return
     }
     try {
-      const url = `https://api.openweathermap.org/data/2.5/weather?q=${city}&units=metric&appid=${import.meta.env.VITE_APP_ID}`
+      const response = await fetch(`http://localhost:5000/api/weather/current?city=${encodeURIComponent(city)}`)
+      const result = await response.json()
 
-      const response = await fetch(url)
-      const data = await response.json()
-
-      if (!response.ok) {
-        alert(data.message)
+      if (!response.ok || result?.success === false) {
+        alert(result?.message || 'Failed to fetch weather')
         return
       }
+
+      const data = result.data || result
 
       console.log(data)
       const icon = ALL_ICONS[data.weather[0].icon] || clear_icon

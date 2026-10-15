@@ -2,7 +2,6 @@ import { Router } from "express";
 
 import {
   orchestrateWeatherQuery,
-  executeWeatherPlan,
   executeOrchestratedQuery
 } from "../agents/orchestratorAgent.js";
 
@@ -80,6 +79,9 @@ const handleExecute = async (req, res) => {
     const latitude = Number.isFinite(parsedLat) ? parsedLat : null;
     const longitude = Number.isFinite(parsedLon) ? parsedLon : null;
 
+    const headerKey = req.headers['x-groq-api-key'];
+    const activeApiKey = params.apiKey || headerKey || null;
+
     const result = await executeOrchestratedQuery({
       query,
       latitude,
@@ -89,11 +91,25 @@ const handleExecute = async (req, res) => {
       uvData,
       activity,
       cityAnalyses,
-      cities
+      cities,
+      apiKey: activeApiKey
     });
 
     if (result.success === false) {
-      return res.status(400).json(result);
+      if (result.dataQuality) {
+        return res.json({
+          success: true,
+          data: {
+            ...result,
+            status: 'insufficient_data'
+          }
+        });
+      }
+      return res.status(400).json({
+        success: false,
+        message: result.message || "Orchestration analysis could not be completed.",
+        data: result
+      });
     }
 
     res.json({

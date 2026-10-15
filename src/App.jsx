@@ -35,7 +35,20 @@ import './App.css'
 
 const App = () => {
   // Navigation & View state
-  const [activeTab, setActiveTab] = useState('overview')
+  const [activeTab, setActiveTab] = useState(() => {
+    try {
+      const urlParams = new URLSearchParams(window.location.search)
+      const tabParam = urlParams.get('tab')
+      if (tabParam) return tabParam
+      if (window.location.hash) {
+        const hash = window.location.hash.replace('#', '')
+        if (hash) return hash
+      }
+    } catch {
+      // fallback
+    }
+    return 'overview'
+  })
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
 
   // Weather data state
@@ -216,19 +229,31 @@ const App = () => {
             timezoneOffset={currentWeather ? currentWeather.timezoneOffset : undefined}
           />
 
-          {/* Quick Nav Chips */}
-          <div className="quick-access-bar">
-            <RecentSearches
-              searches={recentSearches}
-              onSelectCity={handleSearch}
-              onClearHistory={handleClearRecent}
-              activeCity={activeCity}
-            />
-          </div>
+          {/* Quick Nav Chips (Rendered for standard dashboard tabs; AI page uses its own compact bar) */}
+          {activeTab !== 'ai' && activeTab !== 'recent' && (
+            <div className="quick-access-bar">
+              <RecentSearches
+                searches={recentSearches}
+                onSelectCity={handleSearch}
+                onClearHistory={handleClearRecent}
+                activeCity={activeCity}
+              />
+            </div>
+          )}
 
           {/* Main Dashboard Views */}
           <main className="main-viewport" aria-live="polite">
-            {isLoading ? (
+            {activeTab === 'ai' ? (
+              <div className="view-grid ai-view">
+                <AIIntelligence
+                  weatherData={currentWeather}
+                  recentSearches={recentSearches}
+                  onSelectCity={handleSearch}
+                  onClearHistory={handleClearRecent}
+                  activeCity={activeCity}
+                />
+              </div>
+            ) : isLoading ? (
               <LoadingSkeleton />
             ) : errorMessage ? (
               <ErrorState
@@ -288,12 +313,6 @@ const App = () => {
                   </div>
                 )}
 
-                {/* AI WEATHER INTELLIGENCE TAB VIEW */}
-                {activeTab === 'ai' && (
-                  <div className="view-grid ai-view">
-                    <AIIntelligence weatherData={currentWeather} />
-                  </div>
-                )}
 
                 {/* 2. WEATHER INSIGHTS TAB VIEW */}
                 {activeTab === 'insights' && (

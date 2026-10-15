@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   BrainCircuit,
   LoaderCircle,
@@ -20,31 +20,110 @@ import {
   Copy,
   Check,
   MapPin,
-  RefreshCw,
-  Code,
   Layers,
+  Code,
   Compass,
-  Smile,
-  Meh,
-  Frown
+  XCircle,
+  Clock,
+  Trash2,
+  ExternalLink,
+  ChevronRight,
+  Bot,
+  Zap,
+  Send,
+  Key,
+  MessageSquare,
+  Shirt,
+  HeartPulse,
+  RefreshCw
 } from 'lucide-react';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/$/, '');
 
-const QUICK_PROMPTS = [
-  { label: '🏃 Running today?', query: 'Should I go running today?' },
+const SUGGESTED_QUERIES = [
+  { label: '🏃 Running suitability', query: 'Should I go running today?' },
   { label: '🚴 Cycling conditions', query: 'Is it safe for cycling this afternoon?' },
-  { label: '☂️ Outdoor dining check', query: 'Will it rain during outdoor dining tonight?' },
-  { label: '🧥 Comfort & what to wear', query: 'Is it comfortable outside for a long walk?' }
+  { label: '🏊 Outdoor swimming', query: 'Is it suitable for outdoor swimming?' },
+  { label: '☕ Outdoor dining', query: 'Will it rain during outdoor dining tonight?' },
+  { label: '🚗 Driving safety', query: 'Are road conditions safe for driving?' },
+  { label: '🏙️ City comparison', query: 'Compare London and Paris for sightseeing' }
 ];
 
-export default function AIIntelligence({ weatherData }) {
+export default function AIIntelligence({
+  weatherData,
+  recentSearches = [],
+  onSelectCity,
+  onClearHistory,
+  activeCity = ''
+}) {
   const [query, setQuery] = useState('Should I go running today?');
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [activeTab, setActiveTab] = useState('decision');
+  const [activeTab, setActiveTab] = useState('radar'); // 'radar' | 'copilot' | 'audit' | 'cities'
   const [copied, setCopied] = useState(false);
+  const [jsonCopied, setJsonCopied] = useState(false);
+
+  // Groq API Key & Status State
+  const [groqApiKey, setGroqApiKey] = useState(() => {
+    try {
+      return localStorage.getItem('weather_groq_api_key') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [groqStatus, setGroqStatus] = useState({ configured: false, model: 'llama-3.3-70b-versatile' });
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [keySavedToast, setKeySavedToast] = useState(false);
+
+  // Live Copilot Chat State
+  const [chatMessages, setChatMessages] = useState([
+    {
+      role: 'assistant',
+      content: `Hello! I'm your Live Weather AI Copilot, powered by Groq's ultra-fast LLaMA 3.3. Ask me anything about current conditions, outfit planning, best activity times, or safety recommendations!`,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      model: 'llama-3.3-70b-versatile',
+      isLive: true
+    }
+  ]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatBusy, setChatBusy] = useState(false);
+  const chatBottomRef = useRef(null);
+
+  // Check Groq status on mount and when key changes
+  useEffect(() => {
+    const checkGroq = async () => {
+      try {
+        const headers = groqApiKey ? { 'x-groq-api-key': groqApiKey } : {};
+        const res = await fetch(`${API_BASE}/llm/status`, { headers });
+        const json = await res.json();
+        if (json.success) {
+          setGroqStatus(json);
+        }
+      } catch {
+        // backend might not be ready yet
+      }
+    };
+    checkGroq();
+  }, [groqApiKey]);
+
+  const handleSaveApiKey = () => {
+    const trimmed = apiKeyInput.trim();
+    setGroqApiKey(trimmed);
+    try {
+      if (trimmed) {
+        localStorage.setItem('weather_groq_api_key', trimmed);
+      } else {
+        localStorage.removeItem('weather_groq_api_key');
+      }
+    } catch {
+      // storage unavailable
+    }
+    setKeySavedToast(true);
+    setTimeout(() => setKeySavedToast(false), 2500);
+    setShowApiKeyModal(false);
+  };
 
   const runAnalysis = async (customQuery) => {
     const activePrompt = typeof customQuery === 'string' ? customQuery : query;
@@ -52,19 +131,22 @@ export default function AIIntelligence({ weatherData }) {
 
     setBusy(true);
     setError('');
-    setResult(null);
 
     try {
       const params = new URLSearchParams({ query: activePrompt });
-      const lat = weatherData?.coord?.lat;
-      const lon = weatherData?.coord?.lon;
+      const lat = Number.isFinite(weatherData?.coord?.lat) ? weatherData.coord.lat : 18.5204;
+      const lon = Number.isFinite(weatherData?.coord?.lon) ? weatherData.coord.lon : 73.8567;
+      params.set('lat', String(lat));
+      params.set('lon', String(lon));
 
-      if (Number.isFinite(lat) && Number.isFinite(lon)) {
-        params.set('lat', String(lat));
-        params.set('lon', String(lon));
+      const headers = {};
+      if (groqApiKey) {
+        headers['x-groq-api-key'] = groqApiKey;
       }
 
-      const response = await fetch(`${API_BASE}/orchestrator/execute?${params.toString()}`);
+      const response = await fetch(`${API_BASE}/orchestrator/execute?${params.toString()}`, {
+        headers
+      });
       let payload;
       try {
         payload = await response.json();
@@ -79,19 +161,11 @@ export default function AIIntelligence({ weatherData }) {
       const data = payload.data ?? payload;
       setResult(data);
 
-      // Smart default active tab selection based on returned payload
-      if (data.activityDecision) {
-        setActiveTab('decision');
-      } else if (data.riskResult) {
-        setActiveTab('risk');
-      } else if (data.trendResult) {
-        setActiveTab('trends');
-      } else if (data.cityResult) {
+      // Auto-switch to relevant tab if special response
+      if (data?.cityResult) {
         setActiveTab('cities');
-      } else if (data.reasoningResult) {
-        setActiveTab('reasoning');
-      } else {
-        setActiveTab('decision');
+      } else if (data?.status === 'insufficient_data') {
+        setActiveTab('audit');
       }
     } catch (err) {
       setError(err?.message || 'Unable to connect to the AI weather backend. Make sure the server is running on port 5000.');
@@ -100,59 +174,240 @@ export default function AIIntelligence({ weatherData }) {
     }
   };
 
+  const handleSendChatMessage = async (customMessage) => {
+    const textToSend = typeof customMessage === 'string' ? customMessage : chatInput;
+    if (!textToSend.trim() || chatBusy) return;
+
+    const userMsg = {
+      role: 'user',
+      content: textToSend.trim(),
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+
+    setChatMessages(prev => [...prev, userMsg]);
+    setChatInput('');
+    setChatBusy(true);
+
+    try {
+      const weatherContext = {
+        cityName: result?.normalizedData?.current?.cityName || activeCity || weatherData?.cityName || 'Current City',
+        temperature: result?.normalizedData?.current?.temperature ?? weatherData?.temperature,
+        feelsLike: result?.normalizedData?.current?.feelsLike ?? weatherData?.feelsLike,
+        weatherCondition: result?.normalizedData?.current?.weatherCondition ?? weatherData?.weatherCondition,
+        humidity: result?.normalizedData?.current?.humidity ?? weatherData?.humidity,
+        windSpeed: result?.normalizedData?.current?.windSpeed ?? weatherData?.windSpeed,
+        uvIndex: result?.normalizedData?.current?.uvIndex ?? weatherData?.uvIndex,
+        overallRisk: result?.riskResult?.overallRisk?.level,
+        riskScore: result?.riskResult?.overallRisk?.score,
+        suitabilityScore: result?.activityDecision?.suitability?.score,
+        suitabilityClass: result?.activityDecision?.suitability?.classification,
+        trend: result?.trendResult?.overallTrend?.level
+      };
+
+      const headers = { 'Content-Type': 'application/json' };
+      if (groqApiKey) {
+        headers['x-groq-api-key'] = groqApiKey;
+      }
+
+      const res = await fetch(`${API_BASE}/llm/chat`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          message: textToSend.trim(),
+          conversationHistory: chatMessages.slice(-6),
+          weatherContext
+        })
+      });
+
+      const data = await res.json();
+
+      const assistantMsg = {
+        role: 'assistant',
+        content: data.reply || (data.message ? `Error: ${data.message}` : 'No response from AI assistant.'),
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        model: data.model || groqStatus.model || 'llama-3.3-70b-versatile',
+        latencyMs: data.latencyMs,
+        isLive: Boolean(data.isLiveGroq)
+      };
+
+      setChatMessages(prev => [...prev, assistantMsg]);
+    } catch (err) {
+      setChatMessages(prev => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: `Connection error: ${err.message}. Ensure backend is running.`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          isError: true
+        }
+      ]);
+    } finally {
+      setChatBusy(false);
+      setTimeout(() => chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+    }
+  };
+
+  useEffect(() => {
+    const initialPrompt = activeCity ? `Should I go running in ${activeCity}?` : 'Should I go running today?';
+    setQuery(initialPrompt);
+    runAnalysis(initialPrompt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleSubmit = (e) => {
     e?.preventDefault();
     runAnalysis();
   };
 
-  const handleSelectQuickPrompt = (promptText) => {
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      runAnalysis();
+    }
+  };
+
+  const handleSelectSuggested = (promptText) => {
     setQuery(promptText);
     runAnalysis(promptText);
   };
 
-  const handleCopySummary = () => {
+  const handleCopyVerdict = () => {
     if (!result) return;
-    const recommendation =
+    const textToCopy =
       result?.activityDecision?.decision?.recommendation ||
       result?.riskResult?.decision?.recommendation ||
       result?.reasoningResult?.summary ||
       result?.message ||
       'AI Analysis completed.';
 
-    navigator.clipboard?.writeText(recommendation).then(() => {
+    navigator.clipboard?.writeText(textToCopy).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2200);
     });
   };
 
-  // Helper color tags
+  const handleCopyJson = () => {
+    if (!result) return;
+    navigator.clipboard?.writeText(JSON.stringify(result, null, 2)).then(() => {
+      setJsonCopied(true);
+      setTimeout(() => setJsonCopied(false), 2200);
+    });
+  };
+
+  // Active extracted components
+  const activityData = result?.activityDecision;
+  const riskData = result?.riskResult;
+  const trendData = result?.trendResult;
+  const qualityData = result?.dataQuality;
+  const checksData = result?.checks || [];
+  const cityData = result?.cityResult;
+  const normalizedCurrent = result?.normalizedData?.current;
+
+  // --------------------------------------------------------------------------
+  // Evidence-based Verdict State Calculation
+  // --------------------------------------------------------------------------
+  let verdictState = 'favorable'; // 'favorable' | 'caution' | 'unfavorable' | 'insufficient-data'
+  let verdictTitle = 'Favorable Conditions';
+  let trajectoryNote = null;
+
+  const suitabilityScore = activityData?.suitability?.score;
+  const suitabilityClass = activityData?.suitability?.classification;
+  const overallRiskLevel = riskData?.overallRisk?.level;
+  const trendLevel = trendData?.overallTrend?.level;
+
+  if (result?.status === 'insufficient_data' || qualityData?.status === 'INSUFFICIENT' || result?.success === false) {
+    verdictState = 'insufficient-data';
+    verdictTitle = 'Insufficient Telemetry';
+  } else if (activityData?.suitability) {
+    const isFavorableCurrent = suitabilityScore >= 65 && overallRiskLevel !== 'HIGH' && overallRiskLevel !== 'VERY HIGH';
+    const isWorseningTrend = trendLevel === 'WORSENING';
+    const isImprovingTrend = trendLevel === 'IMPROVING';
+
+    if (isFavorableCurrent) {
+      if (isWorseningTrend) {
+        // Current is favorable but forward forecast deteriorates
+        verdictState = 'caution';
+        verdictTitle = 'Favorable Now • Deteriorating Ahead';
+        const shiftReason = trendData?.keyChanges?.[0]?.description || 'weather deterioration in forward forecast intervals';
+        trajectoryNote = `Current conditions are favorable (${suitabilityClass}, score ${suitabilityScore}/100), but the forecast indicates deterioration later (${shiftReason}). Plan outdoor activities promptly or monitor incoming shifts.`;
+      } else {
+        verdictState = 'favorable';
+        verdictTitle = suitabilityClass === 'EXCELLENT' ? 'Optimal Outdoor Conditions' : 'Favorable Conditions';
+      }
+    } else if (suitabilityScore >= 45 && suitabilityScore < 65) {
+      verdictState = 'caution';
+      verdictTitle = 'Moderate Conditions • Caution Advised';
+      if (isImprovingTrend) {
+        const shiftReason = trendData?.keyChanges?.[0]?.description || 'forward conditions projected to improve';
+        trajectoryNote = `Current conditions are moderate (${suitabilityClass}, score ${suitabilityScore}/100), but the forward trajectory indicates improvement ahead (${shiftReason}).`;
+      }
+    } else {
+      // Unfavorable (< 45 or high risk)
+      verdictState = 'unfavorable';
+      verdictTitle = overallRiskLevel === 'VERY HIGH' || overallRiskLevel === 'HIGH'
+        ? 'High Risk • Unfavorable Conditions'
+        : 'Unfavorable Conditions';
+      if (isImprovingTrend) {
+        const shiftReason = trendData?.keyChanges?.[0]?.description || 'conditions projected to ease later';
+        trajectoryNote = `Current conditions are unsuitable (${suitabilityClass || 'Unsuitable'}, score ${suitabilityScore ?? 0}/100), but forward trends show gradual improvement ahead (${shiftReason}).`;
+      }
+    }
+  } else if (riskData?.overallRisk) {
+    // Non-activity general query
+    if (overallRiskLevel === 'LOW') {
+      if (trendLevel === 'WORSENING') {
+        verdictState = 'caution';
+        verdictTitle = 'Low Current Hazard • Worsening Trend';
+        trajectoryNote = 'Current environmental risk is low, but the forward trajectory indicates deteriorating atmospheric conditions.';
+      } else {
+        verdictState = 'favorable';
+        verdictTitle = 'Low Environmental Hazard';
+      }
+    } else if (overallRiskLevel === 'MODERATE') {
+      verdictState = 'caution';
+      verdictTitle = 'Moderate Environmental Hazard';
+    } else {
+      verdictState = 'unfavorable';
+      verdictTitle = 'Elevated Environmental Risk';
+    }
+  }
+
+  const heroRecommendation =
+    activityData?.decision?.recommendation ||
+    riskData?.decision?.recommendation ||
+    result?.reasoningResult?.summary ||
+    result?.message ||
+    (verdictState === 'insufficient-data'
+      ? 'Weather sensor telemetry is incomplete or corrupt for reliable AI decisions.'
+      : 'AI Multi-Agent evaluation completed.');
+
   const getSuitabilityColor = (classification) => {
     switch (classification) {
       case 'EXCELLENT':
-        return { badge: 'badge-excellent', color: '#10b981', label: 'Excellent' };
+        return { cls: 'suitability-pill-excellent', color: '#10b981', label: 'Excellent' };
       case 'GOOD':
-        return { badge: 'badge-good', color: '#38bdf8', label: 'Good' };
+        return { cls: 'suitability-pill-good', color: '#38bdf8', label: 'Good' };
       case 'MODERATE':
-        return { badge: 'badge-moderate', color: '#f59e0b', label: 'Moderate' };
+        return { cls: 'suitability-pill-moderate', color: '#f59e0b', label: 'Moderate' };
       case 'POOR':
-        return { badge: 'badge-poor', color: '#f97316', label: 'Poor' };
+        return { cls: 'suitability-pill-poor', color: '#f97316', label: 'Poor' };
       case 'UNSUITABLE':
-        return { badge: 'badge-unsuitable', color: '#ef4444', label: 'Unsuitable' };
+        return { cls: 'suitability-pill-unsuitable', color: '#ef4444', label: 'Unsuitable' };
       default:
-        return { badge: 'badge-neutral', color: '#94a3b8', label: classification || 'Analyzed' };
+        return { cls: 'suitability-pill-neutral', color: '#94a3b8', label: classification || 'Analyzed' };
     }
   };
 
   const getRiskBadge = (level) => {
     switch (level) {
       case 'LOW':
-        return { cls: 'risk-pill-low', color: '#10b981', text: 'Low Risk' };
+        return { cls: 'risk-pill-low', color: '#10b981', text: 'Low' };
       case 'MODERATE':
-        return { cls: 'risk-pill-mod', color: '#f59e0b', text: 'Moderate Risk' };
+        return { cls: 'risk-pill-mod', color: '#f59e0b', text: 'Moderate' };
       case 'HIGH':
-        return { cls: 'risk-pill-high', color: '#f97316', text: 'High Risk' };
+        return { cls: 'risk-pill-high', color: '#f97316', text: 'High' };
       case 'VERY HIGH':
-        return { cls: 'risk-pill-vhigh', color: '#ef4444', text: 'Very High Risk' };
+        return { cls: 'risk-pill-vhigh', color: '#ef4444', text: 'Very High' };
       default:
         return { cls: 'risk-pill-neutral', color: '#94a3b8', text: level || 'Unknown' };
     }
@@ -161,99 +416,109 @@ export default function AIIntelligence({ weatherData }) {
   const getTrendIcon = (level) => {
     switch (level) {
       case 'IMPROVING':
-        return <TrendingUp className="trend-icon-improving" size={18} />;
+        return <TrendingUp className="trend-icon-improving" size={20} />;
       case 'WORSENING':
-        return <TrendingDown className="trend-icon-worsening" size={18} />;
+        return <TrendingDown className="trend-icon-worsening" size={20} />;
       default:
-        return <Minus className="trend-icon-stable" size={18} />;
+        return <Minus className="trend-icon-stable" size={20} />;
     }
   };
-
-  const getComfortEmoji = (level) => {
-    switch (level) {
-      case 'COMFORTABLE':
-        return <Smile size={20} className="comfort-icon-good" />;
-      case 'MODERATE':
-      case 'COOL':
-        return <Meh size={20} className="comfort-icon-mod" />;
-      case 'UNCOMFORTABLE':
-      case 'VERY UNCOMFORTABLE':
-        return <Frown size={20} className="comfort-icon-bad" />;
-      default:
-        return <Smile size={20} />;
-    }
-  };
-
-  // Active extracted components
-  const activityData = result?.activityDecision;
-  const riskData = result?.riskResult;
-  const trendData = result?.trendResult;
-  const reasoningData = result?.reasoningResult;
-  const cityData = result?.cityResult;
-  const qualityData = result?.dataQuality;
 
   const suitabilityMeta = activityData?.suitability
     ? getSuitabilityColor(activityData.suitability.classification)
     : null;
 
-  const overallRiskMeta = riskData?.overallRisk?.level
-    ? getRiskBadge(riskData.overallRisk.level)
-    : null;
+  const currentDisplayCity =
+    normalizedCurrent?.cityName ||
+    activeCity ||
+    weatherData?.cityName ||
+    '';
 
-  const heroRecommendation =
-    activityData?.decision?.recommendation ||
-    riskData?.decision?.recommendation ||
-    reasoningData?.summary ||
-    result?.message ||
-    'AI Multi-Agent Evaluation Completed.';
-
-  const isCaution =
-    activityData?.decision?.cautionRequired ||
-    riskData?.decision?.cautionRequired ||
-    false;
+  const currentCoordinates =
+    normalizedCurrent?.coordinates?.latitude && normalizedCurrent?.coordinates?.longitude
+      ? `${Number(normalizedCurrent.coordinates.latitude).toFixed(2)}°, ${Number(normalizedCurrent.coordinates.longitude).toFixed(2)}°`
+      : weatherData?.coord?.lat && weatherData?.coord?.lon
+      ? `${Number(weatherData.coord.lat).toFixed(2)}°, ${Number(weatherData.coord.lon).toFixed(2)}°`
+      : null;
 
   return (
-    <section className="ai-intelligence-page">
-      {/* Top Header Card */}
+    <section className="ai-intelligence-page" aria-label="AI Weather Intelligence">
+      {/* 1. TOP UTILITY: Recent Searches Bar */}
+      {recentSearches && recentSearches.length > 0 && (
+        <div className="ai-recent-searches-bar">
+          <div className="ai-recent-left">
+            <Clock size={14} className="ai-recent-icon" />
+            <span className="ai-recent-label">Recent:</span>
+            <div className="ai-recent-chips">
+              {recentSearches.slice(0, 6).map((city, idx) => {
+                const isActive = activeCity && activeCity.toLowerCase() === city.toLowerCase();
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    className={`ai-recent-chip ${isActive ? 'active' : ''}`}
+                    onClick={() => onSelectCity && onSelectCity(city)}
+                    title={`Load weather for ${city}`}
+                  >
+                    {city}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {onClearHistory && (
+            <button
+              type="button"
+              className="ai-clear-history-btn"
+              onClick={onClearHistory}
+              title="Clear search history"
+            >
+              <Trash2 size={13} />
+              <span>Clear History</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* 2. AI Intelligence Hero Header */}
       <div className="ai-hero-header">
         <div className="ai-hero-title-group">
           <div className="ai-hero-icon-bubble">
             <BrainCircuit size={28} />
           </div>
-          <div>
+          <div className="ai-hero-text">
             <div className="ai-hero-badge">
-              <Sparkles size={14} />
-              <span>Multi-Agent Neural Weather Engine</span>
+              <Sparkles size={13} />
+              <span>Multi-Agent Neural Weather Intelligence</span>
             </div>
             <h2>AI Weather Intelligence</h2>
             <p>
-              Ask natural-language questions about your plans. Autonomous agents analyze real-time
-              telemetry, microclimate risk, and forward trends to deliver actionable guidance.
+              Ask natural-language questions about your activities, plans, and travel safety. Autonomous agents
+              validate sensor integrity, quantify multi-dimensional risk vectors, and project forward trends.
             </p>
           </div>
         </div>
 
-        {/* City Coordinates context bar */}
+        {/* Active Location Indicator */}
         <div className="ai-location-indicator">
-          <MapPin size={16} />
-          <span>
-            {weatherData?.cityName ? (
+          <MapPin size={16} className="text-cyan" />
+          <span className="ai-location-text">
+            {currentDisplayCity ? (
               <>
-                Active Location: <strong>{weatherData.cityName}</strong>
-                {weatherData.coord && (
-                  <span className="ai-coords-tag">
-                    ({weatherData.coord.lat?.toFixed(2)}°, {weatherData.coord.lon?.toFixed(2)}°)
-                  </span>
+                Active Location: <strong>{currentDisplayCity}</strong>
+                {currentCoordinates && (
+                  <span className="ai-coords-tag">({currentCoordinates})</span>
                 )}
               </>
             ) : (
-              'Dashboard city not loaded — search for a city in the header to feed real-time coordinates'
+              'No active location selected — search a city above or specify one in your query'
             )}
           </span>
         </div>
       </div>
 
-      {/* Query Form & Quick Suggestions */}
+      {/* 3. Natural Language Analysis Input Panel */}
       <div className="ai-query-panel">
         <form className="ai-intelligence-form" onSubmit={handleSubmit}>
           <div className="ai-textarea-wrapper">
@@ -261,15 +526,17 @@ export default function AIIntelligence({ weatherData }) {
               id="ai-weather-query"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={handleKeyDown}
               rows={2}
-              placeholder="e.g., Should I go running today? Is it safe for an outdoor BBQ?"
+              placeholder="Ask anything, e.g., Should I go running today? Is it safe for cycling this afternoon? Compare London and Paris."
+              aria-label="Natural-language weather question"
               required
             />
             <button
               type="submit"
               className="ai-run-button"
               disabled={busy || !query.trim()}
-              title="Execute AI Multi-Agent analysis"
+              title="Execute AI Multi-Agent analysis (Enter)"
             >
               {busy ? (
                 <>
@@ -286,29 +553,29 @@ export default function AIIntelligence({ weatherData }) {
           </div>
         </form>
 
-        {/* Quick prompt suggestions chips */}
+        {/* Suggested Query Chips */}
         <div className="ai-quick-prompts">
-          <span className="ai-quick-label">Try asking:</span>
+          <span className="ai-quick-label">Suggested:</span>
           <div className="ai-chips-list">
-            {QUICK_PROMPTS.map((p, idx) => (
+            {SUGGESTED_QUERIES.map((sq, idx) => (
               <button
                 key={idx}
                 type="button"
                 className="ai-chip-btn"
-                onClick={() => handleSelectQuickPrompt(p.query)}
+                onClick={() => handleSelectSuggested(sq.query)}
                 disabled={busy}
               >
-                {p.label}
+                {sq.label}
               </button>
             ))}
           </div>
         </div>
       </div>
 
-      {/* Error Banner */}
+      {/* Error Message */}
       {error && (
-        <div className="ai-message ai-error">
-          <AlertCircle size={20} />
+        <div className="ai-message ai-error" role="alert">
+          <AlertCircle size={20} className="ai-error-icon" />
           <div className="ai-error-content">
             <strong>Analysis Interrupted</strong>
             <p>{error}</p>
@@ -316,52 +583,64 @@ export default function AIIntelligence({ weatherData }) {
         </div>
       )}
 
-      {/* Processing State Animation */}
-      {busy && (
+      {/* Loading Spinner Indicator when initial query runs */}
+      {busy && !result && (
         <div className="ai-thinking-card">
           <div className="ai-thinking-spinner">
             <LoaderCircle size={36} className="ai-spin" />
           </div>
           <div className="ai-thinking-text">
-            <h4>Agents Running Analysis…</h4>
-            <p>Evaluating telemetry checks, environmental risks, forecast trajectories, and decision parameters</p>
+            <h4>Agents Running Multi-Tier Analysis…</h4>
+            <p>Validating telemetry quality, computing compound hazard vectors, and synthesizing recommendations</p>
           </div>
         </div>
       )}
 
-      {/* Rich Analysis Results Area */}
-      {result && !busy && (
-        <div className="ai-results-dashboard">
-          {/* 1. Hero Verdict Card */}
-          <div className={`ai-verdict-card ${isCaution ? 'verdict-caution' : 'verdict-favorable'}`}>
+      {/* Empty State when no result exists yet and not loading */}
+      {!result && !busy && !error && (
+        <div className="ai-empty-prompt-state">
+          <BrainCircuit size={40} className="ai-empty-icon" />
+          <h3>Autonomous Weather Intelligence Ready</h3>
+          <p>Ask about cycling, running, hiking, beach trips, or compare cities to trigger multi-agent analysis.</p>
+        </div>
+      )}
+
+      {/* 4. Analysis Results Area */}
+      {result && (
+        <div className={`ai-results-dashboard ${busy ? 'ai-results-refreshing' : ''}`}>
+          {/* AI Decision Verdict Card */}
+          <div className={`ai-verdict-card verdict-${verdictState}`}>
             <div className="ai-verdict-top">
               <div className="ai-verdict-pill-row">
                 <span className="ai-verdict-agent-tag">
                   <BrainCircuit size={14} /> AI Decision Verdict
                 </span>
 
-                {activityData?.suitability && (
-                  <span className={`ai-suitability-pill ${suitabilityMeta.badge}`}>
-                    {suitabilityMeta.label} ({activityData.suitability.score}/100)
-                  </span>
-                )}
+                <span className={`ai-status-pill pill-${verdictState}`}>
+                  {verdictState === 'favorable' ? (
+                    <CheckCircle2 size={14} />
+                  ) : verdictState === 'caution' ? (
+                    <AlertTriangle size={14} />
+                  ) : verdictState === 'insufficient-data' ? (
+                    <AlertCircle size={14} />
+                  ) : (
+                    <XCircle size={14} />
+                  )}
+                  <span>{verdictTitle}</span>
+                </span>
 
-                {isCaution ? (
-                  <span className="ai-status-pill pill-caution">
-                    <AlertTriangle size={13} /> Caution Advised
-                  </span>
-                ) : (
-                  <span className="ai-status-pill pill-clear">
-                    <CheckCircle2 size={13} /> Favorable Conditions
+                {activityData?.suitability && suitabilityMeta && (
+                  <span className={`ai-suitability-pill ${suitabilityMeta.cls}`}>
+                    {suitabilityMeta.label} ({activityData.suitability.score}/100)
                   </span>
                 )}
               </div>
 
               <button
-                className="ai-copy-btn"
-                onClick={handleCopySummary}
-                title="Copy recommendation"
                 type="button"
+                className="ai-copy-btn"
+                onClick={handleCopyVerdict}
+                title="Copy verdict to clipboard"
               >
                 {copied ? <Check size={14} className="copied-check" /> : <Copy size={14} />}
                 <span>{copied ? 'Copied' : 'Copy Verdict'}</span>
@@ -370,123 +649,233 @@ export default function AIIntelligence({ weatherData }) {
 
             <div className="ai-verdict-main">
               <div className="ai-verdict-icon">
-                {isCaution ? (
-                  <AlertTriangle size={32} className="icon-caution-amber" />
+                {verdictState === 'favorable' ? (
+                  <CheckCircle2 size={36} className="icon-favorable-green" />
+                ) : verdictState === 'caution' ? (
+                  <AlertTriangle size={36} className="icon-caution-amber" />
                 ) : (
-                  <CheckCircle2 size={32} className="icon-favorable-green" />
+                  <AlertCircle size={36} className="icon-unfavorable-red" />
                 )}
               </div>
               <div className="ai-verdict-text-block">
-                <p className="ai-verdict-recommendation">"{heroRecommendation}"</p>
+                {result?.llmInsight ? (
+                  <div className="ai-groq-executive-banner">
+                    <div className="ai-groq-header-row">
+                      <div className="ai-groq-title-wrap">
+                        <div className="ai-groq-pulse-icon">
+                          <Zap size={16} />
+                        </div>
+                        <span className="ai-groq-brand">Groq Live AI • {result.llmInsight.model || 'High-Speed'}</span>
+                        {result.llmInsight.isLiveGroq ? (
+                          <span className="ai-groq-status-live">
+                            <span className="live-dot" />
+                            Live Inference {result.llmInsight.latencyMs ? `(${result.llmInsight.latencyMs}ms)` : ''}
+                          </span>
+                        ) : (
+                          <button 
+                            type="button" 
+                            className="ai-groq-status-fallback"
+                            onClick={() => {
+                              setApiKeyInput(groqApiKey);
+                              setShowApiKeyModal(true);
+                            }}
+                            title="Click to enter Groq API Key for live LLaMA 3.3"
+                          >
+                            <Key size={12} />
+                            <span>Connect Groq Key</span>
+                          </button>
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        className="ai-groq-copilot-shortcut-btn"
+                        onClick={() => setActiveTab('copilot')}
+                      >
+                        <MessageSquare size={14} />
+                        <span>Chat Copilot</span>
+                      </button>
+                    </div>
+
+                    <p className="ai-groq-verdict-text">
+                      "{result.llmInsight.executiveVerdict || heroRecommendation}"
+                    </p>
+
+                    <div className="ai-groq-highlights-grid">
+                      {result.llmInsight.optimalTimeWindow && (
+                        <div className="ai-groq-highlight-pill time-pill">
+                          <Clock size={15} className="pill-icon" />
+                          <div className="pill-content">
+                            <span className="pill-title">Optimal Time Window</span>
+                            <span className="pill-body">{result.llmInsight.optimalTimeWindow}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {result.llmInsight.gearAndClothing && result.llmInsight.gearAndClothing.length > 0 && (
+                        <div className="ai-groq-highlight-pill gear-pill">
+                          <Shirt size={15} className="pill-icon" />
+                          <div className="pill-content">
+                            <span className="pill-title">Recommended Gear & Attire</span>
+                            <span className="pill-body">{result.llmInsight.gearAndClothing.join(' • ')}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {result.llmInsight.healthAndSafetyTips && result.llmInsight.healthAndSafetyTips.length > 0 && (
+                        <div className="ai-groq-highlight-pill health-pill">
+                          <HeartPulse size={15} className="pill-icon" />
+                          <div className="pill-content">
+                            <span className="pill-title">Health & Precaution Advisory</span>
+                            <span className="pill-body">{result.llmInsight.healthAndSafetyTips.join(' • ')}</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="ai-verdict-recommendation">"{heroRecommendation}"</p>
+                )}
+
+                {/* Forward Trajectory Distinction Banner */}
+                {trajectoryNote && (
+                  <div className="ai-trajectory-distinction-banner">
+                    <TrendingDown size={16} className="text-amber flex-shrink-0" />
+                    <span>{trajectoryNote}</span>
+                  </div>
+                )}
+
+                {/* Metadata Row: Intent, Activity, Executed Agents */}
                 <div className="ai-verdict-metadata-row">
                   {result.intent && (
                     <span className="ai-meta-chip">
-                      <strong>Intent:</strong> {result.intent.toLowerCase().replace('_', ' ')}
+                      <strong>Intent:</strong> {String(result.intent).toLowerCase().replace('_', ' ')}
                     </span>
                   )}
-                  {result.activity && (
+                  {result.activity && result.activity !== 'general' && (
                     <span className="ai-meta-chip">
                       <strong>Activity:</strong> {result.activity}
                     </span>
                   )}
-                  {result.executionPlan && (
+                  {result.executedAgents && result.executedAgents.length > 0 ? (
                     <span className="ai-meta-chip">
-                      <strong>Active Agents:</strong> {result.executionPlan.join(' • ')}
+                      <strong>Executed Agents:</strong> {result.executedAgents.map(a => `${a} (${result.agentStatuses?.[a] || 'completed'})`).join(' • ')}
+                    </span>
+                  ) : result.executionPlan && result.executionPlan.length > 0 ? (
+                    <span className="ai-meta-chip">
+                      <strong>Planned Agents:</strong> {result.executionPlan.join(' • ')}
+                    </span>
+                  ) : null}
+                  {result.isPartial && (
+                    <span className="ai-meta-chip partial-alert">
+                      <strong>Partial Results</strong>
                     </span>
                   )}
                 </div>
+
+                {/* Safety limitations notice */}
+                {activityData?.safetyLimitations && activityData.safetyLimitations.length > 0 && (
+                  <div className="ai-safety-notice-row">
+                    <AlertCircle size={14} className="text-amber flex-shrink-0" />
+                    <span>{activityData.safetyLimitations[0]}</span>
+                  </div>
+                )}
               </div>
             </div>
           </div>
 
-          {/* 2. Top-Level Metric KPI Cards */}
+          {/* 5. Four Summary Cards */}
           <div className="ai-kpi-grid">
-            {/* KPI 1: Activity Suitability */}
+            {/* KPI 1: Suitability Score */}
             <div className="ai-kpi-card">
               <div className="ai-kpi-header">
                 <span className="ai-kpi-label">Suitability Score</span>
-                <Activity size={18} className="ai-kpi-icon blue" />
+                <div className="ai-kpi-icon-wrap blue">
+                  <Activity size={18} />
+                </div>
               </div>
               <div className="ai-kpi-value-row">
-                <span className="ai-kpi-number">
-                  {activityData?.suitability?.score ?? (100 - (riskData?.overallRisk?.score ?? 0))}
-                </span>
-                <span className="ai-kpi-max">/100</span>
+                {activityData?.suitability?.score != null ? (
+                  <>
+                    <span className="ai-kpi-number">{activityData.suitability.score}</span>
+                    <span className="ai-kpi-max">/100</span>
+                  </>
+                ) : (
+                  <span className="ai-kpi-number text-muted-sub">Unavailable</span>
+                )}
               </div>
               <div className="ai-progress-bar">
                 <div
                   className="ai-progress-fill"
                   style={{
-                    width: `${Math.min(
-                      Math.max(
-                        activityData?.suitability?.score ??
-                          (100 - (riskData?.overallRisk?.score ?? 0)),
-                        0
-                      ),
-                      100
-                    )}%`,
+                    width: activityData?.suitability?.score != null ? `${activityData.suitability.score}%` : '0%',
                     backgroundColor: suitabilityMeta?.color || '#38bdf8'
                   }}
                 />
               </div>
               <div className="ai-kpi-subtext">
-                Rating: <strong>{activityData?.suitability?.classification || 'Assessed'}</strong>
+                Rating: <strong>{activityData?.suitability?.classification || 'General / Non-activity'}</strong>
               </div>
             </div>
 
-            {/* KPI 2: Overall Risk Index */}
+            {/* KPI 2: Overall Risk Level */}
             <div className="ai-kpi-card">
               <div className="ai-kpi-header">
                 <span className="ai-kpi-label">Overall Risk Level</span>
-                <ShieldAlert size={18} className="ai-kpi-icon amber" />
+                <div className="ai-kpi-icon-wrap amber">
+                  <ShieldAlert size={18} />
+                </div>
               </div>
               <div className="ai-kpi-value-row">
-                <span className="ai-kpi-number">
-                  {riskData?.overallRisk?.score ?? 0}
-                </span>
-                <span className="ai-kpi-max">/100</span>
+                {riskData?.overallRisk?.score != null ? (
+                  <>
+                    <span className="ai-kpi-number">{riskData.overallRisk.score}</span>
+                    <span className="ai-kpi-max">/100</span>
+                  </>
+                ) : (
+                  <span className="ai-kpi-number text-muted-sub">Unknown</span>
+                )}
               </div>
               <div className="ai-progress-bar">
                 <div
                   className="ai-progress-fill"
                   style={{
-                    width: `${Math.min(Math.max(riskData?.overallRisk?.score ?? 0, 0), 100)}%`,
-                    backgroundColor: overallRiskMeta?.color || '#10b981'
+                    width: riskData?.overallRisk?.score != null ? `${riskData.overallRisk.score}%` : '0%',
+                    backgroundColor: riskData?.overallRisk?.level ? getRiskBadge(riskData.overallRisk.level).color : '#10b981'
                   }}
                 />
               </div>
               <div className="ai-kpi-subtext">
-                Risk Tier: <strong style={{ color: overallRiskMeta?.color }}>{riskData?.overallRisk?.level || 'LOW'}</strong>
+                Hazard Tier: <strong style={{ color: riskData?.overallRisk?.level ? getRiskBadge(riskData.overallRisk.level).color : 'inherit' }}>
+                  {riskData?.overallRisk?.level || 'Unavailable'}
+                </strong>
               </div>
             </div>
 
-            {/* KPI 3: Forecast Trend Trajectory */}
+            {/* KPI 3: Forecast Trajectory */}
             <div className="ai-kpi-card">
               <div className="ai-kpi-header">
                 <span className="ai-kpi-label">Forecast Trajectory</span>
-                <TrendingUp size={18} className="ai-kpi-icon purple" />
+                <div className="ai-kpi-icon-wrap purple">
+                  {getTrendIcon(trendData?.overallTrend?.level)}
+                </div>
               </div>
-              <div className="ai-trend-trajectory-row">
-                {getTrendIcon(trendData?.overallTrend?.level)}
-                <span className="ai-kpi-trend-word">
-                  {trendData?.overallTrend?.level || 'STABLE'}
+              <div className="ai-kpi-value-row">
+                <span className="ai-kpi-number text-trend-title">
+                  {trendData?.overallTrend?.level || 'Unavailable'}
                 </span>
               </div>
-              <div className="ai-kpi-trend-impact">
-                {activityData?.forecastContext?.trendAdjustment ? (
-                  <span>
-                    Trend Impact: <strong>{activityData.forecastContext.trendAdjustment > 0 ? `+${activityData.forecastContext.trendAdjustment}` : activityData.forecastContext.trendAdjustment} pts</strong>
-                  </span>
-                ) : (
-                  <span>Trajectory based on {trendData?.forecastRecordsAnalyzed || 40} hourly records</span>
-                )}
+              <div className="ai-progress-bar">
+                <div
+                  className="ai-progress-fill"
+                  style={{
+                    width: trendData?.overallTrend?.level === 'IMPROVING' ? '85%' : trendData?.overallTrend?.level === 'STABLE' ? '50%' : '25%',
+                    backgroundColor: trendData?.overallTrend?.level === 'IMPROVING' ? '#10b981' : trendData?.overallTrend?.level === 'STABLE' ? '#38bdf8' : '#f59e0b'
+                  }}
+                />
               </div>
               <div className="ai-kpi-subtext">
-                {trendData?.overallTrend?.level === 'WORSENING'
-                  ? 'Conditions decline later'
-                  : trendData?.overallTrend?.level === 'IMPROVING'
-                  ? 'Conditions improve ahead'
-                  : 'Stable forward window'}
+                Horizon: <strong>{trendData?.forecastRecordsAnalyzed || (qualityData?.forecastRecords ?? 40)} pts (5 days)</strong>
               </div>
             </div>
 
@@ -494,88 +883,69 @@ export default function AIIntelligence({ weatherData }) {
             <div className="ai-kpi-card">
               <div className="ai-kpi-header">
                 <span className="ai-kpi-label">Telemetry Quality</span>
-                <ShieldCheck size={18} className="ai-kpi-icon green" />
+                <div className="ai-kpi-icon-wrap green">
+                  <ShieldCheck size={18} />
+                </div>
               </div>
               <div className="ai-kpi-value-row">
-                <span className="ai-kpi-number">
-                  {qualityData?.score ?? 100}%
-                </span>
-                <span className="ai-kpi-badge-green">VERIFIED</span>
+                {qualityData?.score != null ? (
+                  <>
+                    <span className="ai-kpi-number">{qualityData.score}%</span>
+                    <span className={`ai-kpi-status-badge badge-${(qualityData.status || 'degraded').toLowerCase()}`}>
+                      {qualityData.status || 'READY'}
+                    </span>
+                  </>
+                ) : (
+                  <span className="ai-kpi-number text-muted-sub">Unavailable</span>
+                )}
               </div>
               <div className="ai-progress-bar">
                 <div
                   className="ai-progress-fill"
-                  style={{ width: `${qualityData?.score ?? 100}%`, backgroundColor: '#10b981' }}
+                  style={{
+                    width: qualityData?.score != null ? `${qualityData.score}%` : '0%',
+                    backgroundColor: qualityData?.status === 'READY' ? '#10b981' : qualityData?.status === 'DEGRADED' ? '#f59e0b' : '#ef4444'
+                  }}
                 />
               </div>
               <div className="ai-kpi-subtext">
-                Status: <strong>{qualityData?.status || 'READY'}</strong> (All validation checks passed)
+                Integrity: <strong>{qualityData?.validChecks ?? 0} / {qualityData?.totalChecks ?? 0} checks valid</strong>
               </div>
             </div>
           </div>
 
-          {/* 3. Section Navigation Tabs */}
+          {/* 6. Diagnostic Tabs */}
           <div className="ai-tabs-container">
-            <div className="ai-tabs-bar">
-              {activityData && (
-                <button
-                  type="button"
-                  className={`ai-tab-btn ${activeTab === 'decision' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('decision')}
-                >
-                  <Activity size={16} />
-                  <span>Activity Decision</span>
-                </button>
-              )}
-
-              {riskData && (
-                <button
-                  type="button"
-                  className={`ai-tab-btn ${activeTab === 'risk' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('risk')}
-                >
-                  <ShieldAlert size={16} />
-                  <span>Risk Radar</span>
-                </button>
-              )}
-
-              {trendData && (
-                <button
-                  type="button"
-                  className={`ai-tab-btn ${activeTab === 'trends' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('trends')}
-                >
-                  <TrendingUp size={16} />
-                  <span>Forecast Shifts</span>
-                </button>
-              )}
-
-              {reasoningData && (
-                <button
-                  type="button"
-                  className={`ai-tab-btn ${activeTab === 'reasoning' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('reasoning')}
-                >
-                  <Smile size={16} />
-                  <span>Comfort & Reasoning</span>
-                </button>
-              )}
-
-              {cityData && (
-                <button
-                  type="button"
-                  className={`ai-tab-btn ${activeTab === 'cities' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('cities')}
-                >
-                  <Compass size={16} />
-                  <span>City Leaderboard</span>
-                </button>
-              )}
+            <div className="ai-tabs-bar" role="tablist" aria-label="Intelligence Views">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'radar'}
+                className={`ai-tab-btn ${activeTab === 'radar' ? 'active' : ''}`}
+                onClick={() => setActiveTab('radar')}
+              >
+                <ShieldAlert size={16} />
+                <span>Risk Radar</span>
+              </button>
 
               <button
                 type="button"
-                className={`ai-tab-btn ${activeTab === 'data' ? 'active' : ''}`}
-                onClick={() => setActiveTab('data')}
+                role="tab"
+                aria-selected={activeTab === 'copilot'}
+                className={`ai-tab-btn ai-tab-btn-copilot ${activeTab === 'copilot' ? 'active' : ''}`}
+                onClick={() => setActiveTab('copilot')}
+              >
+                <Zap size={16} className="text-amber-gold" />
+                <span>Live Groq Copilot</span>
+                <span className="tab-pill-badge live-pulse-badge">Live</span>
+              </button>
+
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'audit'}
+                className={`ai-tab-btn ${activeTab === 'audit' ? 'active' : ''}`}
+                onClick={() => setActiveTab('audit')}
               >
                 <Layers size={16} />
                 <span>Data Audit</span>
@@ -583,110 +953,37 @@ export default function AIIntelligence({ weatherData }) {
 
               <button
                 type="button"
-                className={`ai-tab-btn ${activeTab === 'raw' ? 'active' : ''}`}
-                onClick={() => setActiveTab('raw')}
+                role="tab"
+                aria-selected={activeTab === 'cities'}
+                className={`ai-tab-btn ${activeTab === 'cities' ? 'active' : ''}`}
+                onClick={() => setActiveTab('cities')}
               >
-                <Code size={16} />
-                <span>Developer JSON</span>
+                <Compass size={16} />
+                <span>City Comparison</span>
+                {cityData && <span className="tab-pill-badge">{cityData.ranking?.length || 2}</span>}
               </button>
             </div>
 
             {/* TAB CONTENT PANELS */}
             <div className="ai-tab-content-wrapper">
-              {/* TAB 1: Activity Decision */}
-              {activeTab === 'decision' && activityData && (
-                <div className="ai-tab-panel">
-                  <div className="ai-panel-header">
-                    <h3>🎯 Activity Suitability & Contributing Factors</h3>
-                    <p>Deep evaluation tailored for <strong>{activityData.activity}</strong></p>
-                  </div>
-
-                  <div className="ai-factors-split-grid">
-                    {/* Favorable Factors */}
-                    <div className="ai-factor-card favorable-factor-card">
-                      <div className="ai-factor-header">
-                        <CheckCircle2 size={18} className="text-emerald" />
-                        <h4>Favorable Conditions</h4>
-                      </div>
-                      {activityData.factors?.positive?.length ? (
-                        <ul className="ai-factor-list">
-                          {activityData.factors.positive.map((item, idx) => (
-                            <li key={idx} className="ai-factor-item pos">
-                              <span className="factor-bullet green">✓</span>
-                              <span>{item}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className="ai-factor-empty">No standout positive factors recorded.</p>
-                      )}
-                    </div>
-
-                    {/* Negative / Watch Factors */}
-                    <div className="ai-factor-card warning-factor-card">
-                      <div className="ai-factor-header">
-                        <AlertTriangle size={18} className="text-amber" />
-                        <h4>Caution & Risk Watch</h4>
-                      </div>
-                      {activityData.factors?.negative?.length ? (
-                        <ul className="ai-factor-list">
-                          {activityData.factors.negative.map((item, idx) => (
-                            <li key={idx} className="ai-factor-item neg">
-                              <span className="factor-bullet amber">!</span>
-                              <span>{item}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <div className="ai-factor-clean">
-                          <CheckCircle2 size={24} className="text-emerald" />
-                          <p>No critical limiting weather factors detected for this activity.</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Context Note Box */}
-                  <div className="ai-context-banner">
-                    <div className="ai-context-badge">
-                      <Sparkles size={16} />
-                      <span>Contextual Impact</span>
-                    </div>
-                    <p>
-                      Base suitability was assessed at{' '}
-                      <strong>{100 - (activityData.riskAssessment?.activityRiskScore ?? 0)}/100</strong>,
-                      with a forward forecast adjustment of{' '}
-                      <strong>
-                        {activityData.forecastContext?.trendAdjustment > 0
-                          ? `+${activityData.forecastContext.trendAdjustment}`
-                          : activityData.forecastContext?.trendAdjustment ?? 0}{' '}
-                        points
-                      </strong>{' '}
-                      due to anticipated {activityData.forecastContext?.trendLevel?.toLowerCase() || 'stable'} weather.
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {/* TAB 2: Multi-Factor Risk Radar */}
-              {activeTab === 'risk' && riskData && (
-                <div className="ai-tab-panel">
+              {/* TAB 1: Risk Radar */}
+              {activeTab === 'radar' && (
+                <div className="ai-tab-panel" role="tabpanel">
                   <div className="ai-panel-header">
                     <h3>🛡️ Multi-Factor Environmental Risk Assessment</h3>
                     <p>Calculated across 5 primary meteorological risk vectors and cross-parameter interactions</p>
                   </div>
 
-                  {/* Risk Meters Grid */}
                   <div className="ai-risk-meters-grid">
                     {[
-                      { key: 'heat', title: 'Heat & Thermal Stress', icon: <Thermometer size={20} />, data: riskData.risks?.heat },
-                      { key: 'uv', title: 'UV Solar Radiation', icon: <Sun size={20} />, data: riskData.risks?.uv },
-                      { key: 'rain', title: 'Precipitation & Rain', icon: <CloudRain size={20} />, data: riskData.risks?.rain },
-                      { key: 'wind', title: 'Wind & Gust Velocity', icon: <Wind size={20} />, data: riskData.risks?.wind },
-                      { key: 'visibility', title: 'Atmospheric Visibility', icon: <Eye size={20} />, data: riskData.risks?.visibility }
+                      { key: 'heat', title: 'Heat & Thermal Stress', icon: <Thermometer size={18} />, data: riskData?.risks?.heat },
+                      { key: 'uv', title: 'UV Solar Radiation', icon: <Sun size={18} />, data: riskData?.risks?.uv },
+                      { key: 'rain', title: 'Precipitation & Rain', icon: <CloudRain size={18} />, data: riskData?.risks?.rain },
+                      { key: 'wind', title: 'Wind & Gust Velocity', icon: <Wind size={18} />, data: riskData?.risks?.wind },
+                      { key: 'visibility', title: 'Atmospheric Visibility', icon: <Eye size={18} />, data: riskData?.risks?.visibility }
                     ].map(({ key, title, icon, data }) => {
-                      const score = data?.score ?? 0;
-                      const level = data?.level || 'LOW';
+                      const score = data?.score != null ? data.score : null;
+                      const level = data?.level || 'UNKNOWN';
                       const badge = getRiskBadge(level);
 
                       return (
@@ -706,12 +1003,14 @@ export default function AIIntelligence({ weatherData }) {
                               <div
                                 className="ai-risk-meter-fill"
                                 style={{
-                                  width: `${Math.min(Math.max(score, 5), 100)}%`,
+                                  width: score != null ? `${Math.min(Math.max(score, 4), 100)}%` : '0%',
                                   backgroundColor: badge.color
                                 }}
                               />
                             </div>
-                            <span className="ai-risk-meter-score">{score} / 100</span>
+                            <span className="ai-risk-meter-score">
+                              {score != null ? `${score} / 100` : 'Unknown'}
+                            </span>
                           </div>
 
                           <p className="ai-risk-explanation">
@@ -722,262 +1021,597 @@ export default function AIIntelligence({ weatherData }) {
                     })}
                   </div>
 
-                  {/* Interactions banner */}
-                  {riskData.interactions?.length > 0 && (
+                  {/* Compound Interactions */}
+                  {riskData?.interactions && riskData.interactions.length > 0 && (
                     <div className="ai-interactions-box">
                       <h4>⚠️ Compound Parameter Interactions</h4>
                       <ul className="ai-interactions-list">
                         {riskData.interactions.map((interaction, i) => (
-                          <li key={i}>{typeof interaction === 'string' ? interaction : JSON.stringify(interaction)}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* TAB 3: Forecast Trend Shifts */}
-              {activeTab === 'trends' && trendData && (
-                <div className="ai-tab-panel">
-                  <div className="ai-panel-header">
-                    <h3>📈 Meteorological Forecast Trajectory</h3>
-                    <p>{trendData.recommendation || 'Forward shift analysis based on multi-hour time steps'}</p>
-                  </div>
-
-                  {/* 4 Trends Metric Cards */}
-                  <div className="ai-trend-metrics-grid">
-                    {trendData.trends?.temperature && (
-                      <div className="ai-trend-metric-card">
-                        <div className="ai-trend-card-top">
-                          <Thermometer size={18} className="text-blue" />
-                          <span>Temperature Trend</span>
-                        </div>
-                        <div className="ai-trend-main-value">
-                          {trendData.trends.temperature.startValue}°C → {trendData.trends.temperature.endValue}°C
-                        </div>
-                        <div className="ai-trend-delta-pill">
-                          {trendData.trends.temperature.direction === 'RISING' ? '+' : ''}
-                          {trendData.trends.temperature.change}°C ({trendData.trends.temperature.direction})
-                        </div>
-                      </div>
-                    )}
-
-                    {trendData.trends?.humidity && (
-                      <div className="ai-trend-metric-card">
-                        <div className="ai-trend-card-top">
-                          <CloudRain size={18} className="text-cyan" />
-                          <span>Humidity Trend</span>
-                        </div>
-                        <div className="ai-trend-main-value">
-                          {trendData.trends.humidity.startValue}% → {trendData.trends.humidity.endValue}%
-                        </div>
-                        <div className="ai-trend-delta-pill">
-                          {trendData.trends.humidity.direction === 'RISING' ? '+' : ''}
-                          {trendData.trends.humidity.change}% ({trendData.trends.humidity.direction})
-                        </div>
-                      </div>
-                    )}
-
-                    {trendData.trends?.wind && (
-                      <div className="ai-trend-metric-card">
-                        <div className="ai-trend-card-top">
-                          <Wind size={18} className="text-purple" />
-                          <span>Wind Speed Trend</span>
-                        </div>
-                        <div className="ai-trend-main-value">
-                          {trendData.trends.wind.startValue} → {trendData.trends.wind.endValue} km/h
-                        </div>
-                        <div className="ai-trend-delta-pill">
-                          {trendData.trends.wind.direction === 'RISING' ? '+' : ''}
-                          {trendData.trends.wind.change} km/h ({trendData.trends.wind.direction})
-                        </div>
-                      </div>
-                    )}
-
-                    {trendData.trends?.rainProbability && (
-                      <div className="ai-trend-metric-card">
-                        <div className="ai-trend-card-top">
-                          <CloudRain size={18} className="text-blue" />
-                          <span>Precipitation Chance</span>
-                        </div>
-                        <div className="ai-trend-main-value">
-                          {trendData.trends.rainProbability.startValue}% → {trendData.trends.rainProbability.endValue}%
-                        </div>
-                        <div className="ai-trend-delta-pill">
-                          {trendData.trends.rainProbability.direction}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Key Environmental Changes List */}
-                  {trendData.keyChanges?.length > 0 && (
-                    <div className="ai-key-changes-box">
-                      <h4>Key Changes Detected Across Forecast</h4>
-                      <div className="ai-changes-pills">
-                        {trendData.keyChanges.map((change, idx) => (
-                          <div key={idx} className="ai-change-pill">
-                            <Sparkles size={14} />
-                            <span>{change}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* TAB 4: Comfort & Reasoning */}
-              {activeTab === 'reasoning' && reasoningData && (
-                <div className="ai-tab-panel">
-                  <div className="ai-panel-header">
-                    <h3>🧠 Thermal Comfort & Atmospheric Reasoning</h3>
-                    <p>Physics-based bio-meteorological comfort analysis</p>
-                  </div>
-
-                  <div className="ai-comfort-card">
-                    <div className="ai-comfort-header">
-                      {getComfortEmoji(reasoningData.reasoning?.comfort?.level)}
-                      <div>
-                        <h4>Comfort Rating: {reasoningData.reasoning?.comfort?.level || 'MODERATE'}</h4>
-                        <p>{reasoningData.reasoning?.comfort?.reason}</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {reasoningData.reasoning?.observations?.length > 0 && (
-                    <div className="ai-observations-box">
-                      <h4>Atmospheric Observations</h4>
-                      <ul className="ai-observations-list">
-                        {reasoningData.reasoning.observations.map((obs, idx) => (
-                          <li key={idx}>
-                            <span className="obs-dot" />
-                            <span>{obs}</span>
+                          <li key={i}>
+                            <strong>{interaction.severity || 'NOTE'}:</strong>{' '}
+                            {typeof interaction === 'string'
+                              ? interaction
+                              : interaction.explanation || JSON.stringify(interaction)}
                           </li>
                         ))}
                       </ul>
                     </div>
                   )}
-                </div>
-              )}
 
-              {/* TAB 5: City Leaderboard (If Present) */}
-              {activeTab === 'cities' && cityData && (
-                <div className="ai-tab-panel">
-                  <div className="ai-panel-header">
-                    <h3>🏙️ Multi-City Suitability Comparison</h3>
-                    <p>Rankings for <strong>{cityData.activity || 'selected activity'}</strong></p>
-                  </div>
+                  {/* Activity Factors Breakdown if present */}
+                  {activityData?.factors && (activityData.factors.positive?.length > 0 || activityData.factors.negative?.length > 0) && (
+                    <div className="ai-factors-split-grid">
+                      <div className="ai-factor-card favorable-factor-card">
+                        <div className="ai-factor-header">
+                          <CheckCircle2 size={16} className="text-emerald" />
+                          <h4>Favorable Indicators</h4>
+                        </div>
+                        {activityData.factors.positive?.length ? (
+                          <ul className="ai-factor-list">
+                            {activityData.factors.positive.map((item, idx) => (
+                              <li key={idx} className="ai-factor-item">
+                                <span className="factor-bullet green">✓</span>
+                                <span>{item}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="text-muted-sub">No strong favorable indicators identified.</p>
+                        )}
+                      </div>
 
-                  {cityData.winner && (
-                    <div className="ai-city-winner-banner">
-                      <Sparkles size={20} className="text-gold" />
-                      <div>
-                        <h4>Recommended Destination: {cityData.winner.city}</h4>
-                        <p>
-                          Score: {cityData.winner.suitability?.score}/100 • Lead of{' '}
-                          {cityData.scoreDifference ? `${cityData.scoreDifference} points` : 'top rank'}
-                        </p>
+                      <div className="ai-factor-card caution-factor-card">
+                        <div className="ai-factor-header">
+                          <AlertTriangle size={16} className="text-amber" />
+                          <h4>Caution Points</h4>
+                        </div>
+                        {activityData.factors.negative?.length ? (
+                          <ul className="ai-factor-list">
+                            {activityData.factors.negative.map((item, idx) => (
+                              <li key={idx} className="ai-factor-item">
+                                <span className="factor-bullet amber">!</span>
+                                <span>{item}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="text-muted-sub">No significant cautionary points identified.</p>
+                        )}
                       </div>
                     </div>
                   )}
-
-                  <div className="ai-city-ranks-table-wrapper">
-                    <table className="ai-city-ranks-table">
-                      <thead>
-                        <tr>
-                          <th>Rank</th>
-                          <th>City</th>
-                          <th>Suitability</th>
-                          <th>Rating</th>
-                          <th>Risk Tier</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(cityData.ranking || []).map((row) => (
-                          <tr key={row.rank}>
-                            <td className="rank-num">#{row.rank}</td>
-                            <td><strong>{row.city}</strong></td>
-                            <td>{row.suitabilityScore} / 100</td>
-                            <td><span className="rank-badge">{row.classification}</span></td>
-                            <td><span className="rank-risk">{row.riskLevel}</span></td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
                 </div>
               )}
 
-              {/* TAB 6: Data Quality Audit */}
-              {activeTab === 'data' && (
-                <div className="ai-tab-panel">
+              {/* TAB 2: Data Audit */}
+              {activeTab === 'audit' && (
+                <div className="ai-tab-panel" role="tabpanel">
                   <div className="ai-panel-header">
-                    <h3>🛡️ Data Intelligence & Telemetry Verification</h3>
-                    <p>Validating OpenWeather sensor records before upstream intelligence execution</p>
+                    <h3>🛡️ Data Intelligence & Sensor Telemetry Verification</h3>
+                    <p>Quality gatekeeper validates sensor completeness and values before downstream agent decisions</p>
                   </div>
 
+                  {/* Audit Metric Badges */}
                   <div className="ai-audit-stats-grid">
                     <div className="ai-audit-stat-card">
                       <span className="audit-label">Data Quality Score</span>
-                      <span className="audit-value text-emerald">{qualityData?.score ?? 100}%</span>
-                      <span className="audit-desc">Exceeds 80% AI confidence gate</span>
+                      <span className="audit-value text-emerald">{qualityData?.score ?? 0}%</span>
+                      <span className="audit-desc">
+                        {qualityData?.score >= 80 ? 'Exceeds 80% AI confidence gate' : 'Below 80% confidence gate'}
+                      </span>
                     </div>
 
                     <div className="ai-audit-stat-card">
-                      <span className="audit-label">Field Validation Checks</span>
+                      <span className="audit-label">Validation Checks</span>
                       <span className="audit-value">
-                        {qualityData?.validChecks ?? 7} / {qualityData?.totalChecks ?? 7}
+                        {qualityData?.validChecks ?? 0} / {qualityData?.totalChecks ?? 0}
                       </span>
-                      <span className="audit-desc">No corrupted telemetry fields</span>
+                      <span className="audit-desc">Physical bounds & validity verified</span>
                     </div>
 
                     <div className="ai-audit-stat-card">
                       <span className="audit-label">Forecast Horizon</span>
-                      <span className="audit-value">{qualityData?.forecastRecords ?? 40} pts</span>
+                      <span className="audit-value">
+                        {qualityData?.validForecastRecords ?? qualityData?.forecastRecords ?? 0} pts
+                      </span>
                       <span className="audit-desc">Full 5-day / 3-hour coverage</span>
                     </div>
 
                     <div className="ai-audit-stat-card">
-                      <span className="audit-label">Status Flag</span>
-                      <span className="audit-value text-blue">{qualityData?.status ?? 'READY'}</span>
-                      <span className="audit-desc">Approved for downstream AI agents</span>
+                      <span className="audit-label">Readiness State</span>
+                      <span className={`audit-value ${qualityData?.status === 'READY' ? 'text-blue' : 'text-amber'}`}>
+                        {qualityData?.status ?? 'UNKNOWN'}
+                      </span>
+                      <span className="audit-desc">
+                        {qualityData?.status === 'READY' ? 'Approved for downstream AI agents' : 'Degraded telemetry alert'}
+                      </span>
                     </div>
                   </div>
+
+                  {/* Detailed Input Check List */}
+                  {checksData && checksData.length > 0 && (
+                    <div className="ai-audit-checks-section">
+                      <h4>Input Telemetry Audit Results</h4>
+                      <div className="ai-checks-table-wrapper">
+                        <table className="ai-checks-table">
+                          <thead>
+                            <tr>
+                              <th>Parameter</th>
+                              <th>Status</th>
+                              <th>Recorded Value</th>
+                              <th>Validation Rule</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {checksData.map((chk, i) => (
+                              <tr key={i} className={chk.valid ? 'chk-pass' : 'chk-fail'}>
+                                <td><strong>{chk.name}</strong></td>
+                                <td>
+                                  <span className={`ai-chk-pill ${chk.valid ? 'pill-pass' : 'pill-fail'}`}>
+                                    {chk.valid ? 'PASSED' : 'FLAGGED'}
+                                  </span>
+                                </td>
+                                <td>
+                                  <code>
+                                    {chk.value === null || chk.value === undefined
+                                      ? 'null / missing'
+                                      : typeof chk.value === 'object'
+                                      ? JSON.stringify(chk.value)
+                                      : String(chk.value)}
+                                  </code>
+                                </td>
+                                <td>{chk.message}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* TAB 7: Developer Raw JSON Payload */}
-              {activeTab === 'raw' && (
-                <div className="ai-tab-panel">
+              {/* TAB 3: Multi-City Comparison */}
+              {activeTab === 'cities' && (
+                <div className="ai-tab-panel" role="tabpanel">
                   <div className="ai-panel-header">
-                    <div className="ai-panel-title-with-btn">
-                      <div>
-                        <h3>💻 Developer JSON Response Inspector</h3>
-                        <p>Complete unedited payload returned by the Orchestrator API</p>
+                    <h3>🏙️ Multi-City Suitability Comparison</h3>
+                    <p>Rankings and weather suitability for <strong>{cityData?.activity || 'selected activity'}</strong></p>
+                  </div>
+
+                  {cityData ? (
+                    <>
+                      {cityData.winner && (
+                        <div className="ai-city-winner-banner">
+                          <Sparkles size={24} className="text-gold flex-shrink-0" />
+                          <div>
+                            <h4>Recommended Destination: {cityData.winner.city}</h4>
+                            <p>
+                              Suitability: <strong>{cityData.winner.score}/100</strong> ({cityData.winner.classification || 'Top Pick'})
+                              {cityData.winner.scoreDifference != null && (
+                                <span> • Outperforming rival cities by {cityData.winner.scoreDifference} points</span>
+                              )}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Desktop / Tablet Comparison Table */}
+                      <div className="ai-city-ranks-table-wrapper">
+                        <table className="ai-city-ranks-table">
+                          <thead>
+                            <tr>
+                              <th>Rank</th>
+                              <th>Destination</th>
+                              <th>Suitability Score</th>
+                              <th>Rating</th>
+                              <th>Risk Tier</th>
+                              <th>Action</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(cityData.ranking || []).map((row) => (
+                              <tr key={row.rank} className={row.rank === 1 ? 'city-winner-row' : ''}>
+                                <td className="rank-num">#{row.rank}</td>
+                                <td><strong>{row.city}</strong></td>
+                                <td>
+                                  <div className="city-score-cell">
+                                    <span className="city-score-text">{row.suitabilityScore} / 100</span>
+                                    <div className="city-score-mini-bar">
+                                      <div
+                                        className="city-score-fill"
+                                        style={{
+                                          width: `${Math.max(row.suitabilityScore, 5)}%`,
+                                          backgroundColor: row.suitabilityScore >= 65 ? '#10b981' : row.suitabilityScore >= 45 ? '#f59e0b' : '#ef4444'
+                                        }}
+                                      />
+                                    </div>
+                                  </div>
+                                </td>
+                                <td>
+                                  <span className={`rank-badge badge-${row.classification?.toLowerCase()}`}>
+                                    {row.classification}
+                                  </span>
+                                </td>
+                                <td><span className="rank-risk">{row.riskLevel}</span></td>
+                                <td>
+                                  <button
+                                    type="button"
+                                    className="city-select-btn"
+                                    onClick={() => onSelectCity && onSelectCity(row.city)}
+                                    title={`Load weather details for ${row.city}`}
+                                  >
+                                    View City
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
-                      <button
-                        type="button"
-                        className="ai-copy-btn"
-                        onClick={() => {
-                          navigator.clipboard?.writeText(JSON.stringify(result, null, 2));
-                          setCopied(true);
-                          setTimeout(() => setCopied(false), 2000);
-                        }}
-                      >
-                        {copied ? <Check size={14} /> : <Copy size={14} />}
-                        <span>{copied ? 'Copied JSON' : 'Copy Full JSON'}</span>
-                      </button>
+
+                      {/* Mobile Stacked Card View (< 640px) */}
+                      <div className="ai-city-mobile-cards">
+                        {(cityData.ranking || []).map((row) => (
+                          <div key={row.rank} className={`ai-city-card-item ${row.rank === 1 ? 'winner-card' : ''}`}>
+                            <div className="ai-city-card-header">
+                              <div className="ai-city-card-title">
+                                <span className="rank-num">#{row.rank}</span>
+                                <span className="city-card-name">{row.city}</span>
+                              </div>
+                              <span className={`rank-badge badge-${row.classification?.toLowerCase()}`}>
+                                {row.classification}
+                              </span>
+                            </div>
+                            <div className="ai-city-card-body">
+                              <div className="city-stat-pair">
+                                <span className="stat-label">Suitability:</span>
+                                <span className="stat-val"><strong>{row.suitabilityScore}/100</strong></span>
+                              </div>
+                              <div className="city-stat-pair">
+                                <span className="stat-label">Risk Level:</span>
+                                <span className="stat-val">{row.riskLevel}</span>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              className="city-select-btn mobile"
+                              onClick={() => onSelectCity && onSelectCity(row.city)}
+                            >
+                              Inspect {row.city}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="ai-city-comparison-launcher">
+                      <div className="ai-city-launcher-icon">
+                        <Compass size={32} />
+                      </div>
+                      <h4>Multi-City Comparison Engine</h4>
+                      <p>
+                        Compare meteorological suitability, composite hazard indices, and activity conditions
+                        side-by-side between two or more destinations.
+                      </p>
+                      <div className="ai-launcher-suggestions">
+                        <span className="launcher-subhead">Run an instant city comparison query:</span>
+                        <div className="ai-launcher-chips">
+                          <button
+                            type="button"
+                            className="ai-chip-btn"
+                            onClick={() => handleSelectSuggested('Compare London and Paris for sightseeing')}
+                          >
+                            🏙️ London vs Paris (Sightseeing)
+                          </button>
+                          <button
+                            type="button"
+                            className="ai-chip-btn"
+                            onClick={() => handleSelectSuggested('Compare Tokyo and Sydney for outdoor activities')}
+                          >
+                            🌏 Tokyo vs Sydney (Outdoor)
+                          </button>
+                          <button
+                            type="button"
+                            className="ai-chip-btn"
+                            onClick={() => handleSelectSuggested('Compare New York and Berlin for travel')}
+                          >
+                            ✈️ New York vs Berlin (Travel)
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* TAB 4: Live Groq Copilot */}
+              {activeTab === 'copilot' && (
+                <div className="ai-tab-panel copilot-panel" role="tabpanel">
+                  <div className="copilot-panel-header">
+                    <div className="copilot-header-info">
+                      <div className="copilot-avatar-glow">
+                        <Bot size={24} />
+                      </div>
+                      <div>
+                        <div className="copilot-title-row">
+                          <h3>Groq Live AI Copilot</h3>
+                          <span className="copilot-engine-chip">
+                            <Zap size={13} /> {groqStatus.model || 'llama-3.3-70b-versatile'}
+                          </span>
+                          {groqStatus.configured || groqApiKey ? (
+                            <span className="copilot-status-badge live">
+                              <span className="status-live-dot" /> Live Connected
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              className="copilot-status-badge connect-btn"
+                              onClick={() => {
+                                setApiKeyInput(groqApiKey);
+                                setShowApiKeyModal(true);
+                              }}
+                            >
+                              <Key size={12} /> Connect Key
+                            </button>
+                          )}
+                        </div>
+                        <p className="copilot-subtitle">
+                          Real-time conversational assistant grounded in live meteorological telemetry for{' '}
+                          <strong>{normalizedCurrent?.cityName || activeCity || weatherData?.cityName || 'your location'}</strong>
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="copilot-key-settings-btn"
+                      onClick={() => {
+                        setApiKeyInput(groqApiKey);
+                        setShowApiKeyModal(true);
+                      }}
+                      title="Manage Groq API Key"
+                    >
+                      <Key size={14} />
+                      <span>{groqApiKey ? 'Key Active' : 'Set Key'}</span>
+                    </button>
+                  </div>
+
+                  {/* Context Sensor HUD */}
+                  <div className="copilot-telemetry-hud">
+                    <div className="hud-metric">
+                      <span className="hud-label">Temp</span>
+                      <span className="hud-val">
+                        {normalizedCurrent?.temperature ?? weatherData?.temperature ?? '--'}°C
+                      </span>
+                    </div>
+                    <div className="hud-metric">
+                      <span className="hud-label">Condition</span>
+                      <span className="hud-val">
+                        {normalizedCurrent?.weatherCondition ?? weatherData?.weatherCondition ?? 'Clear'}
+                      </span>
+                    </div>
+                    <div className="hud-metric">
+                      <span className="hud-label">Humidity</span>
+                      <span className="hud-val">
+                        {normalizedCurrent?.humidity ?? weatherData?.humidity ?? '--'}%
+                      </span>
+                    </div>
+                    <div className="hud-metric">
+                      <span className="hud-label">Wind</span>
+                      <span className="hud-val">
+                        {normalizedCurrent?.windSpeed ? `${Math.round(normalizedCurrent.windSpeed)} km/h` : weatherData?.windSpeed ? `${Math.round(weatherData.windSpeed * 3.6)} km/h` : '--'}
+                      </span>
+                    </div>
+                    <div className="hud-metric">
+                      <span className="hud-label">Suitability</span>
+                      <span className="hud-val text-emerald">
+                        {activityData?.suitability?.score != null ? `${activityData.suitability.score}/100` : 'Evaluated'}
+                      </span>
+                    </div>
+                    <div className="hud-metric">
+                      <span className="hud-label">Risk</span>
+                      <span className="hud-val text-amber">
+                        {riskData?.overallRisk?.level || 'LOW'}
+                      </span>
                     </div>
                   </div>
 
-                  <pre className="ai-raw-json-viewer">
-                    {JSON.stringify(result, null, 2)}
-                  </pre>
+                  {/* Chat Messages Feed */}
+                  <div className="copilot-chat-feed">
+                    {chatMessages.map((msg, idx) => (
+                      <div
+                        key={idx}
+                        className={`copilot-chat-row ${msg.role === 'user' ? 'user-row' : 'assistant-row'}`}
+                      >
+                        <div className="copilot-msg-avatar">
+                          {msg.role === 'user' ? (
+                            <span>You</span>
+                          ) : (
+                            <Bot size={16} />
+                          )}
+                        </div>
+                        <div className="copilot-msg-bubble">
+                          <div className="copilot-msg-header">
+                            <span className="copilot-sender-name">
+                              {msg.role === 'user' ? 'You' : 'Groq WeatherPulse AI'}
+                            </span>
+                            <span className="copilot-msg-time">{msg.timestamp}</span>
+                            {msg.latencyMs && (
+                              <span className="copilot-latency-pill">{msg.latencyMs}ms</span>
+                            )}
+                          </div>
+                          <div className="copilot-msg-body">
+                            {msg.content.split('\n\n').map((para, pIdx) => (
+                              <p key={pIdx}>{para}</p>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+
+                    {chatBusy && (
+                      <div className="copilot-chat-row assistant-row typing-row">
+                        <div className="copilot-msg-avatar">
+                          <Bot size={16} />
+                        </div>
+                        <div className="copilot-msg-bubble typing-bubble">
+                          <span className="typing-dot" />
+                          <span className="typing-dot" />
+                          <span className="typing-dot" />
+                          <span className="typing-text">Groq LLaMA 3.3 thinking…</span>
+                        </div>
+                      </div>
+                    )}
+                    <div ref={chatBottomRef} />
+                  </div>
+
+                  {/* Suggested Prompts */}
+                  <div className="copilot-suggested-prompts">
+                    <span className="prompts-label">Quick Questions:</span>
+                    <div className="prompts-scroll">
+                      {[
+                        "What's the best time window for a run today?",
+                        "What clothing & gear should I pack?",
+                        "Will the rain affect my evening commute?",
+                        "How will temperature and humidity feel around 2 PM?",
+                        "Is it safe for kids to play sports outside today?"
+                      ].map((promptText, i) => (
+                        <button
+                          key={i}
+                          type="button"
+                          className="copilot-prompt-chip"
+                          onClick={() => handleSendChatMessage(promptText)}
+                          disabled={chatBusy}
+                        >
+                          {promptText}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Chat Input Bar */}
+                  <form
+                    className="copilot-chat-input-bar"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      handleSendChatMessage();
+                    }}
+                  >
+                    <input
+                      type="text"
+                      className="copilot-text-input"
+                      placeholder={`Ask Groq AI about ${normalizedCurrent?.cityName || activeCity || 'weather'} conditions, outfits, travel, or timing...`}
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      disabled={chatBusy}
+                    />
+                    <button
+                      type="submit"
+                      className="copilot-send-btn"
+                      disabled={!chatInput.trim() || chatBusy}
+                    >
+                      {chatBusy ? <LoaderCircle size={18} className="ai-spin" /> : <Send size={18} />}
+                      <span>Send</span>
+                    </button>
+                  </form>
                 </div>
               )}
             </div>
           </div>
+
+          {/* Collapsible Developer Diagnostic Section */}
+          <details className="ai-dev-accordion">
+            <summary className="ai-dev-summary">
+              <Code size={14} />
+              <span>Developer Diagnostic Payload (Raw JSON Debug)</span>
+            </summary>
+            <div className="ai-dev-panel">
+              <div className="ai-dev-panel-header">
+                <span className="ai-dev-badge">JSON CONTRACT</span>
+                <button
+                  type="button"
+                  className="ai-copy-btn small"
+                  onClick={handleCopyJson}
+                >
+                  {jsonCopied ? <Check size={12} className="copied-check" /> : <Copy size={12} />}
+                  <span>{jsonCopied ? 'Copied' : 'Copy Payload'}</span>
+                </button>
+              </div>
+              <pre className="ai-raw-json-viewer">
+                {result ? JSON.stringify(result, null, 2) : '// No analysis response available'}
+              </pre>
+            </div>
+          </details>
+        </div>
+      )}
+
+      {/* Groq API Key Configuration Modal */}
+      {showApiKeyModal && (
+        <div className="ai-modal-overlay" onClick={() => setShowApiKeyModal(false)}>
+          <div className="ai-modal-card" onClick={e => e.stopPropagation()}>
+            <div className="ai-modal-header">
+              <div className="ai-modal-title">
+                <Zap size={20} className="text-amber-gold" />
+                <h3>Connect Live Groq LLM</h3>
+              </div>
+              <button 
+                type="button" 
+                className="ai-modal-close-btn"
+                onClick={() => setShowApiKeyModal(false)}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="ai-modal-body">
+              <p>
+                Accelerate real-time weather reasoning with <strong>Groq LLaMA 3.3 (70B)</strong>. Groq delivers lightning-fast inference at ~300 tokens/sec.
+              </p>
+              <div className="ai-modal-field">
+                <label htmlFor="groq-key-input">Groq API Key</label>
+                <input
+                  id="groq-key-input"
+                  type="password"
+                  placeholder="gsk_..."
+                  value={apiKeyInput}
+                  onChange={e => setApiKeyInput(e.target.value)}
+                  className="ai-modal-input"
+                  autoFocus
+                />
+                <span className="ai-modal-help">
+                  Get a free Groq key in seconds at{' '}
+                  <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer">
+                    console.groq.com/keys <ExternalLink size={12} />
+                  </a>
+                  {' '}(Instant free tier, no credit card required).
+                </span>
+              </div>
+            </div>
+            <div className="ai-modal-actions">
+              <button
+                type="button"
+                className="ai-modal-btn cancel"
+                onClick={() => setShowApiKeyModal(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="ai-modal-btn save"
+                onClick={handleSaveApiKey}
+              >
+                <Check size={16} />
+                Save & Connect
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {keySavedToast && (
+        <div className="ai-key-toast">
+          <CheckCircle2 size={16} className="text-emerald" />
+          <span>Groq API Key saved successfully!</span>
         </div>
       )}
     </section>

@@ -11,6 +11,7 @@ import trendRoutes from "./routes/trendRoutes.js";
 import activityRoutes from "./routes/activityRoutes.js";
 import cityRoutes from "./routes/cityRoutes.js";
 import orchestratorRoutes from "./routes/orchestratorRoutes.js";
+import llmRoutes from "./routes/llmRoutes.js";
 dotenv.config();
 
 const app = express();
@@ -52,7 +53,8 @@ app.use(
 );
 app.use("/api/city", cityRoutes);
 app.use("/api/orchestrator", orchestratorRoutes);
-app.use((err, req, res, next) => {
+app.use("/api/llm", llmRoutes);
+app.use((err, req, res, _next) => {
   console.error('Backend Error:', err);
 
   res.status(500).json({
@@ -65,4 +67,4 @@ app.listen(PORT, () => {
   console.log(
     `AI Weather backend running at http://localhost:${PORT}`
   );
-});
+});
