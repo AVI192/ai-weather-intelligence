@@ -35,10 +35,32 @@ import {
   MessageSquare,
   Shirt,
   HeartPulse,
-  RefreshCw
+  RefreshCw,
+  Building2,
+  Plus,
+  X,
+  Search,
+  Trophy,
+  CheckSquare,
+  Square,
+  ArrowRight
 } from 'lucide-react';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/$/, '');
+
+const COMPARISON_ACTIVITIES = [
+  { id: 'sightseeing', label: 'Sightseeing', icon: '📸' },
+  { id: 'running', label: 'Running', icon: '🏃' },
+  { id: 'cycling', label: 'Cycling', icon: '🚴' },
+  { id: 'swimming', label: 'Swimming', icon: '🏊' },
+  { id: 'hiking', label: 'Hiking', icon: '🥾' },
+  { id: 'travel', label: 'Travelling', icon: '✈️' },
+  { id: 'outdoor_dining', label: 'Outdoor Dining', icon: '🍽️' }
+];
+
+const POPULAR_MANUAL_PRESETS = [
+  'London', 'Paris', 'Tokyo', 'New York', 'Sydney', 'Barcelona', 'Dubai', 'Singapore', 'Berlin', 'Rome'
+];
 
 const SUGGESTED_QUERIES = [
   { label: '🏃 Running suitability', query: 'Should I go running today?' },
@@ -90,6 +112,196 @@ export default function AIIntelligence({
   const [chatInput, setChatInput] = useState('');
   const [chatBusy, setChatBusy] = useState(false);
   const chatBottomRef = useRef(null);
+
+  // Multi-City Comparison State
+  const [cityCompareMode, setCityCompareMode] = useState('recommended'); // 'recommended' | 'manual'
+  const [compareActivity, setCompareActivity] = useState('sightseeing');
+
+  // Mode A: AI Recommended State
+  const [recLoading, setRecLoading] = useState(false);
+  const [recError, setRecError] = useState('');
+  const [recommendedCities, setRecommendedCities] = useState([]);
+  const [selectedRecCities, setSelectedRecCities] = useState([]);
+  const [recLimitations, setRecLimitations] = useState([]);
+  const [hasLoadedRecommendations, setHasLoadedRecommendations] = useState(false);
+
+  // Mode B: Manual Selection State
+  const [manualCities, setManualCities] = useState(['London', 'Paris']);
+  const [manualCityInput, setManualCityInput] = useState('');
+  const [citySearchSuggestions, setCitySearchSuggestions] = useState([]);
+  const [isSearchingCities, setIsSearchingCities] = useState(false);
+  const [duplicateWarning, setDuplicateWarning] = useState('');
+
+  // Comparison Results State
+  const [comparisonResult, setComparisonResult] = useState(null);
+  const [isComparing, setIsComparing] = useState(false);
+  const [compareError, setCompareError] = useState('');
+  const [isStaleResult, setIsStaleResult] = useState(false);
+
+  const fetchRecommendations = async (activityToUse) => {
+    const act = activityToUse || compareActivity;
+    setRecLoading(true);
+    setRecError('');
+    try {
+      const res = await fetch(`${API_BASE}/city/recommendations?activity=${encodeURIComponent(act)}`);
+      const json = await res.json();
+      if (!res.ok || json.success === false) {
+        throw new Error(json.message || 'Failed to fetch AI city recommendations.');
+      }
+      const data = json.data;
+      const ranking = data.ranking || [];
+      setRecommendedCities(ranking);
+      // Pre-select top 3 recommended cities
+      const top3 = ranking.slice(0, 3).map(c => c.city);
+      setSelectedRecCities(top3);
+      setRecLimitations(data.limitations || []);
+      setHasLoadedRecommendations(true);
+    } catch (err) {
+      setRecError(err.message || 'Unable to load recommendations.');
+    } finally {
+      setRecLoading(false);
+    }
+  };
+
+  const handleActivityChange = (actId) => {
+    setCompareActivity(actId);
+    setIsStaleResult(true);
+    if (cityCompareMode === 'recommended') {
+      fetchRecommendations(actId);
+    }
+  };
+
+  const toggleRecCitySelection = (cityName) => {
+    setSelectedRecCities(prev => {
+      const exists = prev.includes(cityName);
+      if (exists) {
+        return prev.filter(c => c !== cityName);
+      } else {
+        if (prev.length >= 5) {
+          return prev;
+        }
+        return [...prev, cityName];
+      }
+    });
+    setIsStaleResult(true);
+  };
+
+  const handleAddManualCity = (cityName) => {
+    const trimmed = (cityName || manualCityInput).trim();
+    if (!trimmed) return;
+
+    if (manualCities.some(c => c.toLowerCase() === trimmed.toLowerCase())) {
+      setDuplicateWarning(`"${trimmed}" is already added to comparison.`);
+      setTimeout(() => setDuplicateWarning(''), 3000);
+      return;
+    }
+
+    if (manualCities.length >= 5) {
+      setDuplicateWarning('A maximum of 5 cities can be compared concurrently.');
+      setTimeout(() => setDuplicateWarning(''), 3000);
+      return;
+    }
+
+    setManualCities(prev => [...prev, trimmed]);
+    setManualCityInput('');
+    setCitySearchSuggestions([]);
+    setDuplicateWarning('');
+    setIsStaleResult(true);
+  };
+
+  const handleRemoveManualCity = (cityToRemove) => {
+    setManualCities(prev => prev.filter(c => c.toLowerCase() !== cityToRemove.toLowerCase()));
+    setIsStaleResult(true);
+  };
+
+  const runCityComparison = async (citiesOverride, activityOverride) => {
+    const targetCities = citiesOverride || (cityCompareMode === 'recommended' ? selectedRecCities : manualCities);
+    const targetActivity = activityOverride || compareActivity;
+
+    if (!Array.isArray(targetCities) || targetCities.length < 2) {
+      setCompareError('Please select at least 2 cities for comparison.');
+      return;
+    }
+
+    setIsComparing(true);
+    setCompareError('');
+    setIsStaleResult(false);
+
+    try {
+      const res = await fetch(`${API_BASE}/city/compare`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cities: targetCities,
+          activity: targetActivity
+        })
+      });
+
+      const json = await res.json();
+      if (!res.ok || json.success === false) {
+        throw new Error(json.message || 'City comparison failed.');
+      }
+
+      setComparisonResult(json.data);
+    } catch (err) {
+      setCompareError(err.message || 'Unable to complete city comparison.');
+    } finally {
+      setIsComparing(false);
+    }
+  };
+
+  const handleRunInstantComparison = (city1, city2, activity) => {
+    setCityCompareMode('manual');
+    setManualCities([city1, city2]);
+    setCompareActivity(activity);
+    setIsStaleResult(false);
+    runCityComparison([city1, city2], activity);
+  };
+
+  // Sync incoming orchestrator cityResult with local comparisonResult
+  useEffect(() => {
+    if (result?.cityResult) {
+      setComparisonResult(result.cityResult);
+      if (result.cityResult.activity) {
+        setCompareActivity(result.cityResult.activity);
+      }
+      setIsStaleResult(false);
+    }
+  }, [result?.cityResult]);
+
+  // Load recommendations when entering cities tab in recommended mode
+  useEffect(() => {
+    if (activeTab === 'cities' && cityCompareMode === 'recommended' && !hasLoadedRecommendations) {
+      fetchRecommendations(compareActivity);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, cityCompareMode, hasLoadedRecommendations]);
+
+  // Live search debouncing for Mode B manual search
+  useEffect(() => {
+    const trimmed = manualCityInput.trim();
+    if (!trimmed || trimmed.length < 2) {
+      setCitySearchSuggestions([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSearchingCities(true);
+      try {
+        const res = await fetch(`${API_BASE}/city/search?q=${encodeURIComponent(trimmed)}`);
+        const json = await res.json();
+        if (json.success && Array.isArray(json.results)) {
+          setCitySearchSuggestions(json.results);
+        }
+      } catch {
+        // search failed
+      } finally {
+        setIsSearchingCities(false);
+      }
+    }, 280);
+
+    return () => clearTimeout(timer);
+  }, [manualCityInput]);
 
   // Check Groq status on mount and when key changes
   useEffect(() => {
@@ -1173,24 +1385,435 @@ export default function AIIntelligence({
 
               {/* TAB 3: Multi-City Comparison */}
               {activeTab === 'cities' && (
-                <div className="ai-tab-panel" role="tabpanel">
+                <div className="ai-tab-panel ai-city-comparison-tab" role="tabpanel">
                   <div className="ai-panel-header">
-                    <h3>🏙️ Multi-City Suitability Comparison</h3>
-                    <p>Rankings and weather suitability for <strong>{cityData?.activity || 'selected activity'}</strong></p>
+                    <div className="ai-city-header-title">
+                      <h3>🏙️ Multi-City Suitability Comparison</h3>
+                      <p>Rankings, composite hazard indices, and real-time suitability for <strong>{compareActivity}</strong></p>
+                    </div>
+
+                    {/* Mode Selector Toggle */}
+                    <div className="ai-city-mode-nav">
+                      <button
+                        type="button"
+                        className={`ai-mode-toggle-btn ${cityCompareMode === 'recommended' ? 'active' : ''}`}
+                        onClick={() => {
+                          setCityCompareMode('recommended');
+                          if (!hasLoadedRecommendations) {
+                            fetchRecommendations(compareActivity);
+                          }
+                        }}
+                      >
+                        <Sparkles size={16} /> Mode A — AI Recommended
+                      </button>
+                      <button
+                        type="button"
+                        className={`ai-mode-toggle-btn ${cityCompareMode === 'manual' ? 'active' : ''}`}
+                        onClick={() => {
+                          setCityCompareMode('manual');
+                        }}
+                      >
+                        <Building2 size={16} /> Mode B — Choose My Own Cities
+                      </button>
+                    </div>
                   </div>
 
-                  {cityData ? (
-                    <>
-                      {cityData.winner && (
-                        <div className="ai-city-winner-banner">
-                          <Sparkles size={24} className="text-gold flex-shrink-0" />
-                          <div>
-                            <h4>Recommended Destination: {cityData.winner.city}</h4>
-                            <p>
-                              Suitability: <strong>{cityData.winner.score}/100</strong> ({cityData.winner.classification || 'Top Pick'})
-                              {cityData.winner.scoreDifference != null && (
-                                <span> • Outperforming rival cities by {cityData.winner.scoreDifference} points</span>
+                  {/* Activity Selector Row */}
+                  <div className="ai-city-activity-bar">
+                    <span className="activity-bar-label">Activity:</span>
+                    <div className="activity-pills-scroll">
+                      {COMPARISON_ACTIVITIES.map((act) => (
+                        <button
+                          key={act.id}
+                          type="button"
+                          className={`activity-pill-btn ${compareActivity === act.id ? 'active' : ''}`}
+                          onClick={() => handleActivityChange(act.id)}
+                        >
+                          <span className="act-icon">{act.icon}</span>
+                          <span className="act-label">{act.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* MODE A: AI RECOMMENDED PANEL */}
+                  {cityCompareMode === 'recommended' && (
+                    <div className="ai-mode-panel ai-rec-panel">
+                      <div className="ai-mode-desc-box">
+                        <Sparkles size={20} className="text-accent flex-shrink-0" />
+                        <div className="ai-mode-desc-text">
+                          <strong>AI Meteorological Recommendations</strong>
+                          <span>
+                            WeatherPulse orchestrator evaluates global candidate cities using current telemetry, forecast trends,
+                            and risk agents for <em>{compareActivity}</em>. Select or remove cities before comparing.
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="ai-rec-refresh-btn"
+                          onClick={() => fetchRecommendations(compareActivity)}
+                          disabled={recLoading}
+                          title="Refresh AI Recommendations"
+                        >
+                          <RefreshCw size={14} className={recLoading ? 'animate-spin' : ''} />
+                          <span>Refresh</span>
+                        </button>
+                      </div>
+
+                      {recLoading && (
+                        <div className="ai-loading-skeleton">
+                          <LoaderCircle size={28} className="animate-spin text-accent" />
+                          <span>Analyzing global telemetry and activity safety profiles for {compareActivity}...</span>
+                        </div>
+                      )}
+
+                      {recError && !recLoading && (
+                        <div className="ai-error-banner">
+                          <AlertTriangle size={18} />
+                          <span>{recError}</span>
+                          <button type="button" className="retry-btn" onClick={() => fetchRecommendations(compareActivity)}>
+                            Retry
+                          </button>
+                        </div>
+                      )}
+
+                      {!recLoading && !recError && recommendedCities.length > 0 && (
+                        <>
+                          <div className="ai-rec-list-header">
+                            <span className="rec-list-title">Recommended Cities (Ranked Most to Least Suitable):</span>
+                            <span className="rec-list-count">
+                              {selectedRecCities.length} selected for comparison (min 2, max 5)
+                            </span>
+                          </div>
+
+                          <div className="ai-rec-cities-grid">
+                            {recommendedCities.map((city) => {
+                              const isSelected = selectedRecCities.includes(city.city);
+                              return (
+                                <div
+                                  key={city.city}
+                                  className={`ai-rec-city-card ${isSelected ? 'selected' : ''}`}
+                                  onClick={() => toggleRecCitySelection(city.city)}
+                                  role="button"
+                                  tabIndex={0}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                      e.preventDefault();
+                                      toggleRecCitySelection(city.city);
+                                    }
+                                  }}
+                                >
+                                  <div className="rec-card-top">
+                                    <div className="rec-card-title-row">
+                                      <span className="rec-card-rank">#{city.rank}</span>
+                                      <div className="rec-city-name-group">
+                                        <span className="rec-city-name">{city.city}</span>
+                                        {city.country && <span className="rec-city-country">{city.country}</span>}
+                                      </div>
+                                    </div>
+                                    <div className="rec-card-checkbox">
+                                      {isSelected ? (
+                                        <CheckSquare size={20} className="text-accent" />
+                                      ) : (
+                                        <Square size={20} className="text-muted" />
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  <div className="rec-card-metrics-row">
+                                    <div className="rec-score-badge">
+                                      <span className="rec-score-val">{city.suitabilityScore}</span>
+                                      <span className="rec-score-denom">/100</span>
+                                      <span className={`rank-badge badge-${city.classification?.toLowerCase()}`}>
+                                        {city.classification}
+                                      </span>
+                                    </div>
+
+                                    <div className="rec-meta-tags">
+                                      <span className="meta-tag risk-tag">Risk: {city.riskLevel}</span>
+                                      <span className="meta-tag trend-tag">Trend: {city.trendLevel}</span>
+                                    </div>
+                                  </div>
+
+                                  {/* Weather Telemetry Summary */}
+                                  <div className="rec-weather-summary">
+                                    <span className="summary-item">
+                                      <Thermometer size={13} />
+                                      {typeof city.temperature === 'number' ? `${city.temperature}°C` : 'Unavailable'}
+                                    </span>
+                                    <span className="summary-item">
+                                      <CloudRain size={13} />
+                                      {typeof city.rainProbability === 'number' ? `${city.rainProbability}% rain` : 'No rain signal'}
+                                    </span>
+                                    <span className="summary-item">
+                                      <Wind size={13} />
+                                      {typeof city.windSpeed === 'number' ? `${city.windSpeed} km/h` : 'Unavailable'}
+                                    </span>
+                                    {typeof city.uvIndex === 'number' && (
+                                      <span className="summary-item">
+                                        <Sun size={13} />
+                                        UV {city.uvIndex}
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {city.explanation && (
+                                    <p className="rec-card-explanation">{city.explanation}</p>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {/* Limitations Notice */}
+                          {recLimitations.length > 0 && (
+                            <div className="ai-limitations-box">
+                              <div className="limitations-header">
+                                <ShieldAlert size={16} className="text-accent" />
+                                <strong>Important Activity & Safety Limitations:</strong>
+                              </div>
+                              <ul>
+                                {recLimitations.map((lim, idx) => (
+                                  <li key={idx}>{lim}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* Action Bar */}
+                          <div className="ai-comparison-action-bar">
+                            <span className="selection-status-text">
+                              {selectedRecCities.length < 2 ? (
+                                <span className="text-warning">Select at least 2 cities to compare</span>
+                              ) : (
+                                <span>Ready to benchmark {selectedRecCities.join(', ')}</span>
                               )}
+                            </span>
+                            <button
+                              type="button"
+                              className="ai-run-compare-btn"
+                              disabled={selectedRecCities.length < 2 || isComparing}
+                              onClick={() => runCityComparison(selectedRecCities, compareActivity)}
+                            >
+                              {isComparing ? (
+                                <>
+                                  <LoaderCircle size={16} className="animate-spin" />
+                                  <span>Comparing Telemetry...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <ArrowRight size={16} />
+                                  <span>Compare Selected Cities ({selectedRecCities.length})</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* MODE B: CHOOSE MY OWN CITIES PANEL */}
+                  {cityCompareMode === 'manual' && (
+                    <div className="ai-mode-panel ai-manual-panel">
+                      <div className="ai-mode-desc-box">
+                        <Building2 size={20} className="text-accent flex-shrink-0" />
+                        <div className="ai-mode-desc-text">
+                          <strong>Choose Custom Destinations</strong>
+                          <span>
+                            Search and add 2 to 5 cities manually. WeatherPulse fetches live ground station readings,
+                            satellite UV, and synoptic radar to evaluate activity suitability.
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* City Input Search Bar */}
+                      <div className="ai-city-search-box">
+                        <form
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            handleAddManualCity();
+                          }}
+                          className="ai-city-search-form"
+                        >
+                          <div className="city-search-input-wrap">
+                            <Search size={16} className="city-search-icon" />
+                            <input
+                              type="text"
+                              className="city-search-input"
+                              placeholder="Search city to add (e.g., Tokyo, Rome, New York)..."
+                              value={manualCityInput}
+                              onChange={(e) => setManualCityInput(e.target.value)}
+                            />
+                            {isSearchingCities && (
+                              <LoaderCircle size={15} className="animate-spin city-search-spinner" />
+                            )}
+                          </div>
+                          <button
+                            type="submit"
+                            className="city-add-btn"
+                            disabled={!manualCityInput.trim() || manualCities.length >= 5}
+                          >
+                            <Plus size={16} /> Add City
+                          </button>
+                        </form>
+
+                        {/* Autocomplete Suggestions Dropdown */}
+                        {citySearchSuggestions.length > 0 && (
+                          <div className="city-search-dropdown">
+                            {citySearchSuggestions.map((sug, i) => (
+                              <button
+                                key={`${sug.name}-${i}`}
+                                type="button"
+                                className="city-sug-item"
+                                onClick={() => handleAddManualCity(sug.name)}
+                              >
+                                <MapPin size={14} className="text-accent" />
+                                <span>{sug.label}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Duplicate or Limit Warning */}
+                      {duplicateWarning && (
+                        <div className="ai-warning-pill">
+                          <AlertCircle size={15} />
+                          <span>{duplicateWarning}</span>
+                        </div>
+                      )}
+
+                      {/* Selected City Chips */}
+                      <div className="ai-selected-chips-container">
+                        <div className="chips-header">
+                          <span className="chips-label">Selected Cities for Comparison ({manualCities.length} / 5):</span>
+                          {manualCities.length < 2 && (
+                            <span className="chips-hint text-warning">Minimum 2 cities required</span>
+                          )}
+                        </div>
+                        <div className="city-chips-wrap">
+                          {manualCities.map((cityName) => (
+                            <div key={cityName} className="ai-city-chip">
+                              <MapPin size={13} className="text-accent" />
+                              <span className="city-chip-name">{cityName}</span>
+                              <button
+                                type="button"
+                                className="city-chip-remove"
+                                onClick={() => handleRemoveManualCity(cityName)}
+                                title={`Remove ${cityName}`}
+                              >
+                                <X size={14} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Popular City Quick-Add Suggestions */}
+                      <div className="popular-presets-row">
+                        <span className="presets-label">Popular Destinations:</span>
+                        <div className="presets-chips">
+                          {POPULAR_MANUAL_PRESETS.map((p) => {
+                            const alreadyAdded = manualCities.some((c) => c.toLowerCase() === p.toLowerCase());
+                            return (
+                              <button
+                                key={p}
+                                type="button"
+                                className={`preset-chip-btn ${alreadyAdded ? 'added' : ''}`}
+                                disabled={alreadyAdded || manualCities.length >= 5}
+                                onClick={() => handleAddManualCity(p)}
+                              >
+                                {alreadyAdded ? '✓' : '+'} {p}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Action Bar */}
+                      <div className="ai-comparison-action-bar">
+                        <span className="selection-status-text">
+                          {manualCities.length < 2 ? (
+                            <span className="text-warning">Select at least 2 cities to benchmark</span>
+                          ) : (
+                            <span>Benchmarking {manualCities.join(' vs ')} for {compareActivity}</span>
+                          )}
+                        </span>
+                        <button
+                          type="button"
+                          className="ai-run-compare-btn"
+                          disabled={manualCities.length < 2 || isComparing}
+                          onClick={() => runCityComparison(manualCities, compareActivity)}
+                        >
+                          {isComparing ? (
+                            <>
+                              <LoaderCircle size={16} className="animate-spin" />
+                              <span>Comparing Cities...</span>
+                            </>
+                          ) : (
+                            <>
+                              <ArrowRight size={16} />
+                              <span>Compare Selected Cities</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ERROR / LOADING NOTICES FOR COMPARISON */}
+                  {isComparing && (
+                    <div className="ai-comparison-loading-overlay">
+                      <LoaderCircle size={32} className="animate-spin text-accent" />
+                      <h4>Executing Multi-Agent Comparison</h4>
+                      <p>Gathering ground-station telemetry, computing activity hazards, and forecasting trajectories...</p>
+                    </div>
+                  )}
+
+                  {compareError && !isComparing && (
+                    <div className="ai-error-banner">
+                      <AlertTriangle size={18} />
+                      <span>{compareError}</span>
+                      <button
+                        type="button"
+                        className="retry-btn"
+                        onClick={() => runCityComparison()}
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  )}
+
+                  {/* COMPARISON RESULTS DASHBOARD */}
+                  {comparisonResult && !isComparing && (
+                    <div className="ai-comparison-results-dashboard">
+                      {isStaleResult && (
+                        <div className="ai-stale-banner">
+                          <AlertCircle size={16} />
+                          <span>
+                            Your city or activity selection was changed. Click <strong>Compare Selected Cities</strong> above to update this dashboard.
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Winner Highlight Card */}
+                      {comparisonResult.winner && (
+                        <div className="ai-city-winner-banner">
+                          <Trophy size={28} className="winner-trophy-icon" />
+                          <div className="winner-details">
+                            <div className="winner-badge-row">
+                              <span className="winner-top-badge">🏆 TOP MATCH</span>
+                              <span className="winner-city-title">
+                                {comparisonResult.winner.city}{comparisonResult.winner.country ? `, ${comparisonResult.winner.country}` : ''}
+                              </span>
+                              <span className={`rank-badge badge-${comparisonResult.winner.classification?.toLowerCase()}`}>
+                                {comparisonResult.winner.classification}
+                              </span>
+                            </div>
+                            <p className="winner-reason-text">
+                              {comparisonResult.winner.reason ||
+                                `${comparisonResult.winner.city} scored highest (${comparisonResult.winner.score}/100) for ${comparisonResult.activity || compareActivity}.`}
                             </p>
                           </div>
                         </div>
@@ -1201,39 +1824,110 @@ export default function AIIntelligence({
                         <table className="ai-city-ranks-table">
                           <thead>
                             <tr>
-                              <th>Rank</th>
-                              <th>Destination</th>
-                              <th>Suitability Score</th>
-                              <th>Rating</th>
-                              <th>Risk Tier</th>
+                              <th>Rank & Destination</th>
+                              <th>Suitability ({comparisonResult.activity || compareActivity})</th>
+                              <th>Temperature</th>
+                              <th>Conditions</th>
+                              <th>Risk & Hazards</th>
+                              <th>Forecast Trend</th>
+                              <th>Suitability Rationale</th>
                               <th>Action</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {(cityData.ranking || []).map((row) => (
+                            {(comparisonResult.ranking || []).map((row) => (
                               <tr key={row.rank} className={row.rank === 1 ? 'city-winner-row' : ''}>
-                                <td className="rank-num">#{row.rank}</td>
-                                <td><strong>{row.city}</strong></td>
+                                {/* Rank & Destination */}
+                                <td className="dest-cell">
+                                  <span className="rank-num">#{row.rank}</span>
+                                  <div className="dest-info">
+                                    <strong className="dest-name">{row.city}</strong>
+                                    {row.country && <span className="dest-country">{row.country}</span>}
+                                  </div>
+                                </td>
+
+                                {/* Suitability Score */}
                                 <td>
                                   <div className="city-score-cell">
-                                    <span className="city-score-text">{row.suitabilityScore} / 100</span>
+                                    <div className="score-num-row">
+                                      <span className="city-score-text">{row.suitabilityScore}/100</span>
+                                      <span className={`rank-badge badge-${row.classification?.toLowerCase()}`}>
+                                        {row.classification}
+                                      </span>
+                                    </div>
                                     <div className="city-score-mini-bar">
                                       <div
                                         className="city-score-fill"
                                         style={{
                                           width: `${Math.max(row.suitabilityScore, 5)}%`,
-                                          backgroundColor: row.suitabilityScore >= 65 ? '#10b981' : row.suitabilityScore >= 45 ? '#f59e0b' : '#ef4444'
+                                          backgroundColor:
+                                            row.suitabilityScore >= 65
+                                              ? '#10b981'
+                                              : row.suitabilityScore >= 45
+                                              ? '#f59e0b'
+                                              : '#ef4444'
                                         }}
                                       />
                                     </div>
                                   </div>
                                 </td>
+
+                                {/* Temperature */}
                                 <td>
-                                  <span className={`rank-badge badge-${row.classification?.toLowerCase()}`}>
-                                    {row.classification}
-                                  </span>
+                                  <div className="telemetry-cell">
+                                    <span className="telemetry-primary">
+                                      {typeof row.temperature === 'number' ? `${row.temperature}°C` : 'Unavailable'}
+                                    </span>
+                                    <span className="telemetry-sub">
+                                      {typeof row.feelsLike === 'number' ? `Feels ${row.feelsLike}°C` : 'Feels unavailable'}
+                                    </span>
+                                  </div>
                                 </td>
-                                <td><span className="rank-risk">{row.riskLevel}</span></td>
+
+                                {/* Conditions */}
+                                <td>
+                                  <div className="telemetry-metrics-grid">
+                                    <span title="Humidity">💧 {typeof row.humidity === 'number' ? `${row.humidity}%` : 'Unavailable'}</span>
+                                    <span title="Wind Speed">💨 {typeof row.windSpeed === 'number' ? `${row.windSpeed} km/h` : 'Unavailable'}</span>
+                                    <span title="Precipitation">🌧️ {typeof row.precipitation === 'number' ? `${row.precipitation} mm` : typeof row.rainProbability === 'number' ? `${row.rainProbability}% rain` : 'Unavailable'}</span>
+                                    <span title="UV Radiation">☀️ {typeof row.uvIndex === 'number' ? `UV ${row.uvIndex}` : 'UV Unavailable'}</span>
+                                  </div>
+                                </td>
+
+                                {/* Risk Level */}
+                                <td>
+                                  <div className="risk-cell">
+                                    <span className={`risk-tag-pill risk-${row.riskLevel?.toLowerCase().replace(/\s+/g, '-')}`}>
+                                      {row.riskLevel || 'LOW'}
+                                    </span>
+                                    {row.factors?.negative?.length > 0 && (
+                                      <span className="hazard-warning-chip" title={row.factors.negative.join(', ')}>
+                                        ⚠️ {row.factors.negative[0]}
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+
+                                {/* Forecast Trend */}
+                                <td>
+                                  <div className="trend-cell">
+                                    {row.trendLevel === 'IMPROVING' ? (
+                                      <TrendingUp size={16} className="text-emerald" />
+                                    ) : row.trendLevel === 'WORSENING' ? (
+                                      <TrendingDown size={16} className="text-rose" />
+                                    ) : (
+                                      <Minus size={16} className="text-amber" />
+                                    )}
+                                    <span className="trend-text">{row.trendLevel || 'STABLE'}</span>
+                                  </div>
+                                </td>
+
+                                {/* Explanation */}
+                                <td className="explanation-cell">
+                                  <p className="explanation-text">{row.explanation || 'Analyzed under standard baseline criteria.'}</p>
+                                </td>
+
+                                {/* Action */}
                                 <td>
                                   <button
                                     type="button"
@@ -1241,7 +1935,7 @@ export default function AIIntelligence({
                                     onClick={() => onSelectCity && onSelectCity(row.city)}
                                     title={`Load weather details for ${row.city}`}
                                   >
-                                    View City
+                                    Inspect City
                                   </button>
                                 </td>
                               </tr>
@@ -1252,27 +1946,49 @@ export default function AIIntelligence({
 
                       {/* Mobile Stacked Card View (< 640px) */}
                       <div className="ai-city-mobile-cards">
-                        {(cityData.ranking || []).map((row) => (
+                        {(comparisonResult.ranking || []).map((row) => (
                           <div key={row.rank} className={`ai-city-card-item ${row.rank === 1 ? 'winner-card' : ''}`}>
                             <div className="ai-city-card-header">
                               <div className="ai-city-card-title">
                                 <span className="rank-num">#{row.rank}</span>
                                 <span className="city-card-name">{row.city}</span>
+                                {row.country && <span className="city-card-country">{row.country}</span>}
                               </div>
                               <span className={`rank-badge badge-${row.classification?.toLowerCase()}`}>
                                 {row.classification}
                               </span>
                             </div>
-                            <div className="ai-city-card-body">
-                              <div className="city-stat-pair">
-                                <span className="stat-label">Suitability:</span>
-                                <span className="stat-val"><strong>{row.suitabilityScore}/100</strong></span>
+
+                            <div className="mobile-metrics-row">
+                              <div className="m-metric">
+                                <span className="m-label">Suitability:</span>
+                                <strong className="m-val">{row.suitabilityScore}/100</strong>
                               </div>
-                              <div className="city-stat-pair">
-                                <span className="stat-label">Risk Level:</span>
-                                <span className="stat-val">{row.riskLevel}</span>
+                              <div className="m-metric">
+                                <span className="m-label">Temperature:</span>
+                                <strong className="m-val">{typeof row.temperature === 'number' ? `${row.temperature}°C` : 'Unavailable'}</strong>
+                              </div>
+                              <div className="m-metric">
+                                <span className="m-label">Risk:</span>
+                                <span className="m-val">{row.riskLevel}</span>
+                              </div>
+                              <div className="m-metric">
+                                <span className="m-label">Trend:</span>
+                                <span className="m-val">{row.trendLevel}</span>
                               </div>
                             </div>
+
+                            <div className="mobile-conditions-row">
+                              <span>💧 {typeof row.humidity === 'number' ? `${row.humidity}%` : 'Unavailable'}</span>
+                              <span>💨 {typeof row.windSpeed === 'number' ? `${row.windSpeed} km/h` : 'Unavailable'}</span>
+                              <span>🌧️ {typeof row.precipitation === 'number' ? `${row.precipitation} mm` : typeof row.rainProbability === 'number' ? `${row.rainProbability}%` : 'Unavailable'}</span>
+                              <span>☀️ {typeof row.uvIndex === 'number' ? `UV ${row.uvIndex}` : 'Unavailable'}</span>
+                            </div>
+
+                            {row.explanation && (
+                              <p className="mobile-explanation-text">{row.explanation}</p>
+                            )}
+
                             <button
                               type="button"
                               className="city-select-btn mobile"
@@ -1283,45 +1999,51 @@ export default function AIIntelligence({
                           </div>
                         ))}
                       </div>
-                    </>
-                  ) : (
-                    <div className="ai-city-comparison-launcher">
-                      <div className="ai-city-launcher-icon">
-                        <Compass size={32} />
-                      </div>
-                      <h4>Multi-City Comparison Engine</h4>
-                      <p>
-                        Compare meteorological suitability, composite hazard indices, and activity conditions
-                        side-by-side between two or more destinations.
-                      </p>
-                      <div className="ai-launcher-suggestions">
-                        <span className="launcher-subhead">Run an instant city comparison query:</span>
-                        <div className="ai-launcher-chips">
-                          <button
-                            type="button"
-                            className="ai-chip-btn"
-                            onClick={() => handleSelectSuggested('Compare London and Paris for sightseeing')}
-                          >
-                            🏙️ London vs Paris (Sightseeing)
-                          </button>
-                          <button
-                            type="button"
-                            className="ai-chip-btn"
-                            onClick={() => handleSelectSuggested('Compare Tokyo and Sydney for outdoor activities')}
-                          >
-                            🌏 Tokyo vs Sydney (Outdoor)
-                          </button>
-                          <button
-                            type="button"
-                            className="ai-chip-btn"
-                            onClick={() => handleSelectSuggested('Compare New York and Berlin for travel')}
-                          >
-                            ✈️ New York vs Berlin (Travel)
-                          </button>
+
+                      {/* Limitations Notice */}
+                      {comparisonResult.limitations && comparisonResult.limitations.length > 0 && (
+                        <div className="ai-limitations-box">
+                          <div className="limitations-header">
+                            <ShieldAlert size={16} className="text-accent" />
+                            <strong>Data Completeness & Safety Notes:</strong>
+                          </div>
+                          <ul>
+                            {comparisonResult.limitations.map((lim, idx) => (
+                              <li key={idx}>{lim}</li>
+                            ))}
+                          </ul>
                         </div>
-                      </div>
+                      )}
                     </div>
                   )}
+
+                  {/* QUICK-START SHORTCUTS CONTAINER */}
+                  <div className="ai-city-quick-shortcuts">
+                    <span className="launcher-subhead">Instant Comparison Shortcuts:</span>
+                    <div className="ai-launcher-chips">
+                      <button
+                        type="button"
+                        className="ai-chip-btn"
+                        onClick={() => handleRunInstantComparison('London', 'Paris', 'sightseeing')}
+                      >
+                        🏙️ London vs Paris (Sightseeing)
+                      </button>
+                      <button
+                        type="button"
+                        className="ai-chip-btn"
+                        onClick={() => handleRunInstantComparison('Tokyo', 'Sydney', 'outdoor')}
+                      >
+                        🌏 Tokyo vs Sydney (Outdoor)
+                      </button>
+                      <button
+                        type="button"
+                        className="ai-chip-btn"
+                        onClick={() => handleRunInstantComparison('New York', 'Berlin', 'travel')}
+                      >
+                        ✈️ New York vs Berlin (Travel)
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
 

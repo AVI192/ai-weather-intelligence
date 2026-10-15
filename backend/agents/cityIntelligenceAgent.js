@@ -118,6 +118,67 @@ const generateFactors = (cityResult) => {
   };
 };
 
+const generateCityExplanation = (cityName, score, classification, activity, factors, overallRiskScore, trendScore, cityResult) => {
+  const posText = factors?.positive?.length > 0 ? factors.positive.join(", ") : "Stable basic parameters";
+  const negText = factors?.negative?.length > 0 ? `Identified weather concerns: ${factors.negative.join(", ")}.` : "No severe atmospheric hazards detected.";
+
+  let weatherContext = "";
+  if (typeof cityResult?.temperature === "number") {
+    weatherContext = `Current temperature is ${Math.round(cityResult.temperature)}°C${typeof cityResult.feelsLike === "number" ? ` (feels like ${Math.round(cityResult.feelsLike)}°C)` : ""}. `;
+  }
+
+  return `${cityName} achieved an ${classification} suitability score (${score}/100) for ${activity}. ${weatherContext}Positive drivers: ${posText.toLowerCase()}. ${negText}`;
+};
+
+const generateWinnerReason = (winner, runnerUp, activity) => {
+  if (!winner) return "";
+  if (!runnerUp) {
+    return `${winner.city} ranks #1 with a suitability score of ${winner.suitability.score}/100 (${winner.suitability.classification}) for ${activity}.`;
+  }
+
+  const diff = round(winner.suitability.score - runnerUp.suitability.score);
+  let rationale = `${winner.city} takes top rank with ${winner.suitability.score}/100 (${winner.suitability.classification}), outperforming ${runnerUp.city} by ${diff} points for ${activity}.`;
+
+  if (winner.risk.score < runnerUp.risk.score) {
+    rationale += ` It features a significantly lower composite hazard risk (${winner.risk.level} vs ${runnerUp.risk.level}).`;
+  } else if (winner.trend.score < runnerUp.trend.score) {
+    rationale += ` Its barometric and cloud cover forecast trajectory is more favorable over the next 24 hours.`;
+  } else {
+    rationale += ` Overall atmospheric conditions align closer with optimal comfort profiles.`;
+  }
+
+  return rationale;
+};
+
+const generateLimitations = (activity, analyzedCities) => {
+  const limitations = [];
+
+  const actLower = String(activity).toLowerCase();
+  if (actLower.includes("swim")) {
+    limitations.push("Swimming suitability evaluation relies on air and radiant heat sensors; coastal water currents, surf hazards, and water temperature require local lifeguard verification.");
+  } else if (actLower.includes("cycl") || actLower.includes("bike")) {
+    limitations.push("Cycling safety requires vigilance on localized crosswinds and slick road surfaces during morning precipitation transitions.");
+  } else if (actLower.includes("run") || actLower.includes("jog")) {
+    limitations.push("Running scores assume standard exertion; high humidity and direct sun can compound perceived thermal strain.");
+  } else if (actLower.includes("hike") || actLower.includes("trek")) {
+    limitations.push("High altitude hiking trails frequently experience sudden microclimatic variations not reflected in standard city valley weather stations.");
+  } else if (actLower.includes("sight") || actLower.includes("travel") || actLower.includes("tour")) {
+    limitations.push("Urban pedestrian comfort can be affected by street-level wind canyons and urban heat island effects.");
+  }
+
+  const hasMissingUV = analyzedCities.some(c => c.uvIndex === null || c.uvIndex === undefined);
+  if (hasMissingUV) {
+    limitations.push("UV index telemetry is unavailable from certain ground stations; radiation risk is estimated via solar zenith and cloud attenuation.");
+  }
+
+  const hasMissingPrecip = analyzedCities.some(c => c.precipitation === null && c.rainProbability === null);
+  if (hasMissingPrecip) {
+    limitations.push("Precipitation gauges for one or more cities did not report minute-rate accumulations; forecast probability was utilized.");
+  }
+
+  return limitations;
+};
+
 const generateRecommendation = (winner, activity) => {
   if (!winner) {
     return `No reliable city recommendation is available for ${activity}.`;
@@ -146,7 +207,7 @@ export const analyzeCityIntelligence = ({
     return {
       agent: {
         name: "City Intelligence Agent",
-        version: "1.0",
+        version: "2.0",
         status: "failed"
       },
       success: false,
@@ -164,7 +225,7 @@ export const analyzeCityIntelligence = ({
     return {
       agent: {
         name: "City Intelligence Agent",
-        version: "1.0",
+        version: "2.0",
         status: "failed"
       },
       success: false,
@@ -173,28 +234,32 @@ export const analyzeCityIntelligence = ({
   }
 
   const analyzedCities = validCitiesInput.map((cityResult) => {
-
     const score = calculateCitySuitability(cityResult);
+    const activityRiskScore = getActivityRiskScore(cityResult);
+    const overallRiskScore = getOverallRiskScore(cityResult);
+    const trendScore = getTrendScore(cityResult);
+    const factors = generateFactors(cityResult);
+    const classification = classifySuitability(score);
 
-    const activityRiskScore =
-      getActivityRiskScore(cityResult);
-
-    const overallRiskScore =
-      getOverallRiskScore(cityResult);
-
-    const trendScore =
-      getTrendScore(cityResult);
-
-    const factors =
-      generateFactors(cityResult);
+    const explanation = generateCityExplanation(
+      cityResult.city,
+      score,
+      classification,
+      activity,
+      factors,
+      overallRiskScore,
+      trendScore,
+      cityResult
+    );
 
     return {
       city: cityResult.city,
-      country: cityResult.country,
+      country: cityResult.country || "",
+      coordinates: cityResult.coordinates || null,
 
       suitability: {
         score,
-        classification: classifySuitability(score)
+        classification
       },
 
       risk: {
@@ -212,10 +277,20 @@ export const analyzeCityIntelligence = ({
         level: getTrendLevel(trendScore)
       },
 
-      factors,
+      // Weather Telemetry (Preserved & Distinguishing Missing Values)
+      temperature: typeof cityResult.temperature === "number" ? round(cityResult.temperature, 1) : null,
+      feelsLike: typeof cityResult.feelsLike === "number" ? round(cityResult.feelsLike, 1) : null,
+      humidity: typeof cityResult.humidity === "number" ? round(cityResult.humidity, 0) : null,
+      windSpeed: typeof cityResult.windSpeed === "number" ? round(cityResult.windSpeed, 1) : null,
+      precipitation: typeof cityResult.precipitation === "number" ? round(cityResult.precipitation, 2) : null,
+      rainProbability: typeof cityResult.rainProbability === "number" ? round(cityResult.rainProbability, 0) : null,
+      uvIndex: typeof cityResult.uvIndex === "number" ? round(cityResult.uvIndex, 1) : null,
+      weatherCondition: cityResult.weatherCondition || "",
+      weatherDescription: cityResult.weatherDescription || "",
 
-      coordinates:
-        cityResult.coordinates || null
+      factors,
+      risks: cityResult.risks || {},
+      explanation
     };
   });
 
@@ -226,7 +301,6 @@ export const analyzeCityIntelligence = ({
   );
 
   const winner = analyzedCities[0];
-
   const runnerUp = analyzedCities[1];
 
   const scoreDifference =
@@ -237,46 +311,54 @@ export const analyzeCityIntelligence = ({
         )
       : null;
 
+  const winnerReason = generateWinnerReason(winner, runnerUp, activity);
+  const limitations = generateLimitations(activity, analyzedCities);
+
   return {
     agent: {
       name: "City Intelligence Agent",
-      version: "1.0",
+      version: "2.0",
       status: "completed"
     },
 
     activity,
+    citiesAnalyzed: analyzedCities.length,
 
-    citiesAnalyzed:
-      analyzedCities.length,
-
-    ranking:
-      analyzedCities.map((city, index) => ({
-        rank: index + 1,
-        city: city.city,
-        suitabilityScore:
-          city.suitability.score,
-        classification:
-          city.suitability.classification,
-        riskLevel:
-          city.risk.level,
-        trendLevel:
-          city.trend.level
-      })),
+    ranking: analyzedCities.map((city, index) => ({
+      rank: index + 1,
+      city: city.city,
+      country: city.country,
+      suitabilityScore: city.suitability.score,
+      classification: city.suitability.classification,
+      riskLevel: city.risk.level,
+      riskScore: city.risk.score,
+      trendLevel: city.trend.level,
+      trendScore: city.trend.score,
+      temperature: city.temperature,
+      feelsLike: city.feelsLike,
+      humidity: city.humidity,
+      windSpeed: city.windSpeed,
+      precipitation: city.precipitation,
+      rainProbability: city.rainProbability,
+      uvIndex: city.uvIndex,
+      weatherCondition: city.weatherCondition,
+      weatherDescription: city.weatherDescription,
+      explanation: city.explanation,
+      factors: city.factors,
+      risks: city.risks
+    })),
 
     winner: {
       city: winner.city,
+      country: winner.country,
       score: winner.suitability.score,
-      classification:
-        winner.suitability.classification,
-      scoreDifference
+      classification: winner.suitability.classification,
+      scoreDifference,
+      reason: winnerReason
     },
 
-    recommendation:
-      generateRecommendation(
-        winner,
-        activity
-      ),
-
+    recommendation: generateRecommendation(winner, activity),
+    limitations,
     comparison: analyzedCities
   };
 };

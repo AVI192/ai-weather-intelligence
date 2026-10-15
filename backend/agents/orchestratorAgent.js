@@ -19,7 +19,17 @@ const CITY_DATABASE = {
   delhi: { name: "Delhi", country: "IN", lat: 28.6139, lon: 77.2090 },
   bangalore: { name: "Bangalore", country: "IN", lat: 12.9716, lon: 77.5946 },
   bengaluru: { name: "Bangalore", country: "IN", lat: 12.9716, lon: 77.5946 },
-  indore: { name: "Indore", country: "IN", lat: 22.7196, lon: 75.8577 }
+  indore: { name: "Indore", country: "IN", lat: 22.7196, lon: 75.8577 },
+  london: { name: "London", country: "GB", lat: 51.5074, lon: -0.1278 },
+  paris: { name: "Paris", country: "FR", lat: 48.8566, lon: 2.3522 },
+  tokyo: { name: "Tokyo", country: "JP", lat: 35.6762, lon: 139.6503 },
+  sydney: { name: "Sydney", country: "AU", lat: -33.8688, lon: 151.2093 },
+  berlin: { name: "Berlin", country: "DE", lat: 52.5200, lon: 13.4050 },
+  "new york": { name: "New York", country: "US", lat: 40.7128, lon: -74.0060 },
+  barcelona: { name: "Barcelona", country: "ES", lat: 41.3851, lon: 2.1734 },
+  dubai: { name: "Dubai", country: "AE", lat: 25.2048, lon: 55.2708 },
+  singapore: { name: "Singapore", country: "SG", lat: 1.3521, lon: 103.8198 },
+  rome: { name: "Rome", country: "IT", lat: 41.9028, lon: 12.4964 }
 };
 
 const normalizeQuery = (query = "") => {
@@ -417,7 +427,7 @@ export const orchestrateWeatherQuery = ({
   };
 };
 
-const buildCityAnalyses = async (cityNames, activity = "general") => {
+export const buildCityAnalyses = async (cityNames, activity = "general") => {
   const analyses = [];
 
   for (const name of cityNames) {
@@ -463,6 +473,22 @@ const buildCityAnalyses = async (cityNames, activity = "general") => {
 
       const prepared = prepareWeatherData(current, forecast, uv);
 
+      // Validate data quality with Data Intelligence Agent
+      const formattedForData = formatCurrentForDataAgent(current, lat, lon);
+      const rawUv = typeof uv === "number" ? uv : (typeof uv?.uvIndex === "number" ? uv.uvIndex : null);
+      let dataQuality = null;
+      try {
+        const dataValidation = analyzeWeatherData({
+          current: formattedForData,
+          forecast,
+          uv: rawUv
+        });
+        dataQuality = dataValidation?.dataQuality || null;
+      } catch (dqErr) {
+        console.warn(`Data quality validation error for ${name}:`, dqErr.message);
+      }
+
+      // Risk Intelligence Agent
       const riskResult = analyzeWeatherRisk({
         current: prepared,
         uvIndex: prepared.uvIndex,
@@ -470,12 +496,27 @@ const buildCityAnalyses = async (cityNames, activity = "general") => {
         activity
       });
 
+      // Forecast Trend Agent
       const trendResult = analyzeForecastTrend(forecast?.list || []);
+
+      const precip1h = typeof current?.rain?.["1h"] === "number"
+        ? current.rain["1h"]
+        : (typeof current?.rain?.["3h"] === "number" ? current.rain["3h"] / 3 : null);
 
       analyses.push({
         city: cityName || current?.name || name,
         country: countryName || current?.sys?.country || "",
         coordinates: { latitude: lat, longitude: lon },
+        temperature: prepared.temperatureCelsius,
+        feelsLike: prepared.feelsLikeCelsius,
+        humidity: prepared.humidityPercent,
+        windSpeed: prepared.windSpeedKmh,
+        precipitation: precip1h,
+        rainProbability: prepared.rainProbability,
+        uvIndex: prepared.uvIndex,
+        weatherCondition: prepared.condition,
+        weatherDescription: prepared.description,
+        dataQuality,
         risks: riskResult.risks,
         overallRisk: riskResult.overallRisk,
         activityRisk: riskResult.activityRisk,
